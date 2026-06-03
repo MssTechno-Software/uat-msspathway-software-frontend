@@ -16,9 +16,8 @@ function Login() {
   const [errorMessage, setErrorMessage] = useState("");
   const navigate = useNavigate();
 
-
   const validateEmail = (value) => {
-    const emailRegex = /^[a-zA-Z0-9_]+@msstechno\.com$/;
+    const emailRegex = /^[a-zA-Z0-9._]+@msstechno\.com$/;
     return emailRegex.test(value);
   };
 
