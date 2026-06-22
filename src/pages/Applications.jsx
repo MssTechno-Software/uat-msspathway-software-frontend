@@ -254,7 +254,7 @@ function Applications() {
     const handleEdit = async (application_id) => {
         try {
             console.log("Editing application id:", application_id);
-            const res = await API.get(`/applications/applications/${application_id}`, {
+            const res = await API.get(`/applications/clients/${client_id}/applications`, {
                 params: { application_id: application_id }
             });
             console.log("Edit API response:", res.data);
