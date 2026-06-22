@@ -32,7 +32,7 @@ const normalizeStatus = (status) => {
 };
 
 const API = axios.create({
-    baseURL: "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app",
+    baseURL: "https://timesheet-api-790373899641.asia-south1.run.app",
 });
 
 API.interceptors.request.use((config) => {

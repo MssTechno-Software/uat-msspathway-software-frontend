@@ -59,7 +59,7 @@ function Calender({ selectedDate, onDateSelect }) {
       console.log("Calling API with:", month, year);
 
       const response = await fetch(
-        `https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/calendar/date-range?month=${month}&year=${year}`,
+        `https://timesheet-api-790373899641.asia-south1.run.app/calendar/date-range?month=${month}&year=${year}`,
         {
           method: "GET",
           headers: {
