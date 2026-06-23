@@ -82,7 +82,7 @@ function PublicHoliday() {
       };
 
       const response = await fetch(
-        `https://timesheet-api-790373899641.asia-south1.run.app/calendar/public-holiday?holiday_date=${payload.holiday_date}&description=${encodeURIComponent(payload.description)}`,
+        `https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/calendar/public-holiday?holiday_date=${payload.holiday_date}&description=${encodeURIComponent(payload.description)}`,
         {
           method: "POST",
           headers: {

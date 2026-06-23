@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Save, Calendar as CalendarIcon, Edit, Trash } from "lucide-react";
 import { FiLoader } from "react-icons/fi";
 const MAX_ENTRIES = 5;
-const BASE_URL = "https://timesheet-api-790373899641.asia-south1.run.app/timesheet";
+const BASE_URL = "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/timesheet";
 
 function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
   if (!selectedDate) return null;
@@ -131,7 +131,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
       }
       try {
         const response = await fetch(
-          `https://timesheet-api-790373899641.asia-south1.run.app/calendar/public-holidays/date/${dateKey}`,
+          `https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/calendar/public-holidays/date/${dateKey}`,
           {
             method: "GET",
             headers: {
