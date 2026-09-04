@@ -126,7 +126,6 @@ function Applications() {
                 setLoading(false);
                 return;
             }
-
             const payload = {
                 platform: app.platform,
                 company_name: app.company,
@@ -194,6 +193,102 @@ function Applications() {
                 message: "Failed to save application",
                 type: "error"
             });
+        }
+    };
+
+
+    // BULK UPLOAD APPLICATIONS
+    const handleBulkUpload = async (file) => {
+        if (!file) {
+            setPopup({
+                show: true,
+                message: "Please select an Excel file",
+                type: "error"
+            });
+            return;
+        }
+
+        try {
+            setLoading(true);
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            console.log("Bulk upload file:", file.name);
+            console.log("Client ID:", client_id);
+
+            const response = await API.post(
+                `/applications/create_bulk/${client_id}`,
+                formData,
+                {
+                    headers: {
+                        "Content-Type": "multipart/form-data"
+                    }
+                }
+            );
+
+            console.log("Bulk upload response:", response.data);
+
+            // Refresh applications after successful bulk upload
+            const res = await API.get(
+                `/applications/applications/${client_id}`
+            );
+
+            const appsObject = res.data?.applications || {};
+
+            const allApplications = Object.entries(appsObject).flatMap(
+                ([platform, apps]) =>
+                    apps.map((app) => ({ ...app, platform }))
+            );
+
+            const formatted = allApplications
+                .map((app) => ({
+                    id: app.id,
+                    platform: app.platform,
+                    company: app.company_name,
+                    role: app.role,
+                    date: app.date,
+                    link: app.application_link,
+                    notes: app.notes,
+                    created_at: app.created_at,
+                    updated_at: app.updated_at
+                }))
+                .sort((a, b) => {
+                    const dateA = new Date(
+                        a.updated_at || a.created_at
+                    );
+                    const dateB = new Date(
+                        b.updated_at || b.created_at
+                    );
+                    return dateB - dateA;
+                });
+
+            setApplications(formatted);
+            setShowModal(false);
+            setEditingApp(null);
+
+            setPopup({
+                show: true,
+                message:
+                    response.data?.message ||
+                    "Applications uploaded successfully",
+                type: "success"
+            });
+        } catch (err) {
+            console.error(
+                "Bulk upload error:",
+                err.response?.data || err.message
+            );
+
+            setPopup({
+                show: true,
+                message:
+                    err.response?.data?.message ||
+                    "Failed to upload applications",
+                type: "error"
+            });
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -764,6 +859,7 @@ function Applications() {
                             setEditingApp(null);
                         }}
                         onAdd={addApplication}
+                        onBulkUpload={handleBulkUpload}
                         editingApp={editingApp}
                         setPopup={setPopup}
                     />

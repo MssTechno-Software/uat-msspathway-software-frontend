@@ -110,7 +110,7 @@ function AddClient({ onClose, onAdd, editingClient, setPopup }) {
         const fetchTechnologies = async () => {
             try {
                 const res = await fetch(
-                    `https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/technologies?search=${techSearch}`,
+                    "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/Topic_based/technologies",
                     {
                         headers: {
                             Authorization: `Bearer ${localStorage.getItem("token")}`
@@ -122,20 +122,16 @@ function AddClient({ onClose, onAdd, editingClient, setPopup }) {
 
                 console.log("Technologies:", data);
 
-                setTechOptions(data || []);
+                setTechOptions(data.technologies || []);
 
             } catch (error) {
                 console.error("Error fetching technologies:", error);
             }
         };
 
-        const timer = setTimeout(() => {
-            fetchTechnologies();
-        }, 300);
+        fetchTechnologies();
 
-        return () => clearTimeout(timer);
-
-    }, [techSearch]);
+    }, []);
 
     //Handle form input changes
     const handleChange = (e) => {
@@ -531,17 +527,17 @@ function AddClient({ onClose, onAdd, editingClient, setPopup }) {
                                     <div className="max-h-40 overflow-y-auto">
                                         {techOptions.map((tech) => (
                                             <label
-                                                key={tech}
+                                                key={tech.technology_id}
                                                 className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer"
                                             >
                                                 <input
                                                     type="checkbox"
-                                                    checked={formData.tech.includes(tech)}
-                                                    onChange={() => toggleTech(tech)}
+                                                    checked={formData.tech.includes(tech.technology_name)}
+                                                    onChange={() => toggleTech(tech.technology_name)}
                                                     className="mr-2 accent-green-700"
                                                 />
 
-                                                <span>{tech}</span>
+                                                <span>{tech.technology_name}</span>
                                             </label>
                                         ))}
                                     </div>

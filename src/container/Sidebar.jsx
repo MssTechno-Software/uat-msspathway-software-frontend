@@ -7,7 +7,9 @@ import {
     FiUser,
     FiChevronLeft,
     FiChevronRight,
-    FiLogOut
+    FiLogOut,
+    FiBriefcase,
+    FiCheckSquare
 } from "react-icons/fi";
 
 import { FaUserTie } from "react-icons/fa";
@@ -202,6 +204,59 @@ function Sidebar({ children }) {
                                 <span>Clients</span>
                             )}
                         </NavLink>
+                        {/* JOB OPENINGS */}
+                        <NavLink
+                            to={
+                                role === "employee"
+                                    ? "/employee-dashboard/jobopenings"
+                                    : "/dashboard/jobopenings"
+                            }
+                            className={({ isActive }) =>
+                                        `
+                                      flex items-center gap-3
+                                      px-4 py-3 rounded-xl
+                                     transition-all duration-200
+                                     ${isActive
+                                    ? "bg-green-800"
+                                    : "hover:bg-green-700"
+                                    }
+                                   `
+                            }
+                        >
+                            <FiBriefcase size={20} />
+
+                            {openSidebar && (
+                                <span>Job Openings</span>
+                            )}
+                        </NavLink>
+                        {/* WORK APPROVAL */}
+{(role === "admin" || role === "super admin") && (
+    <NavLink
+        to={
+            role === "super admin"
+                ? "/super-admin-dashboard/work-approval"
+                : "/dashboard/work-approval"
+        }
+        className={({ isActive }) =>
+            `
+            flex items-center gap-3
+            px-4 py-3 rounded-xl
+            transition-all duration-200
+            ${
+                isActive
+                    ? "bg-green-800"
+                    : "hover:bg-green-700"
+            }
+            `
+        }
+    >
+        <FiCheckSquare size={20} />
+
+        {openSidebar && (
+            <span>Work Approval</span>
+        )}
+    </NavLink>
+)}
 
                         {/* TIMESHEET */}
                         <NavLink

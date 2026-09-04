@@ -1,6 +1,8 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import Sidebar from "../container/Sidebar";
 import Clients from "./Clients";
+import JobOpening from "./JobOpening";
+import WorkApproval from "./WorkApproval";
 import Timesheet from "./Timesheet";
 import AddClient from "./AddClient";
 import LeaveRequests from "./LeaveRequest";
@@ -8,7 +10,6 @@ import Employee from "./Employee";
 import AddEmployee from "./AddEmployee";
 import EmployeeProfile from "./EmployeeProfile";
 import MyProfilePage from "./MyProfilePage";
-
 function Dashboard() {
     const role = localStorage.getItem("role");
     // Block employee users
@@ -27,6 +28,8 @@ function Dashboard() {
                 <Routes>
                     <Route path="/" element={<Navigate to="clients" />} />
                     <Route path="clients" element={<Clients />} />
+                    <Route path="jobopenings" element={<JobOpening />} />
+                    <Route path="work-approval" element={<WorkApproval />} />
                     <Route path="timesheet" element={<Timesheet />} />
                     <Route path="employee" element={<Employee />} />
                     <Route path="add-employee" element={<AddEmployee />} />

@@ -30,7 +30,6 @@ const normalizeStatus = (status) => {
 
     return "Pending";
 };
-
 const API = axios.create({
     baseURL: "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app",
 });
