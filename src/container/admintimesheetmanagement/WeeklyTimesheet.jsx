@@ -1,27 +1,18 @@
 import React, {
+    useCallback,
     useEffect,
     useMemo,
     useState,
 } from "react";
 import { FiLoader } from "react-icons/fi";
 import TimesheetDetailModal from "./TimesheetDetailModal";
-
-/* ============================================================
-   API CONFIG
-============================================================ */
-
-const API_BASE_URL =
-    import.meta.env.VITE_API_BASE_URL ||
-    "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app";
+import api from "../../api/axios";
 
 const dashboardRequests = new Map();
 
 const dayDetailRequests = new Map();
 
-/* ============================================================
-   DATE HELPERS
-============================================================ */
-
+// Get the Monday for the selected date.
 const getMonday = (date) => {
     const result = new Date(date);
 
@@ -39,6 +30,7 @@ const getMonday = (date) => {
     return result;
 };
 
+// Add days without mutating the source date.
 const addDays = (date, days) => {
     const result = new Date(date);
 
@@ -49,6 +41,7 @@ const addDays = (date, days) => {
     return result;
 };
 
+// Move the selected date by full weeks.
 const addWeeks = (date, weeks) => {
     return addDays(
         date,
@@ -56,6 +49,7 @@ const addWeeks = (date, weeks) => {
     );
 };
 
+// Format dates for API requests.
 const formatApiDate = (date) => {
     const year =
         date.getFullYear();
@@ -71,12 +65,14 @@ const formatApiDate = (date) => {
     return `${year}-${month}-${day}`;
 };
 
+// Parse an API date in local time.
 const parseDate = (dateString) => {
     return new Date(
         `${dateString}T00:00:00`
     );
 };
 
+// Format the visible weekly date range.
 const formatWeekRange = (
     weekStart,
     weekEnd
@@ -127,11 +123,7 @@ const formatWeekRange = (
 
     return `${startMonth} ${start.getDate()}, ${startYear} — ${endMonth} ${end.getDate()}, ${endYear}`;
 };
-
-/* ============================================================
-   FORMAT HOURS
-============================================================ */
-
+// Format numeric hours for display.
 const formatHours = (value) => {
     if (
         value === null ||
@@ -143,17 +135,17 @@ const formatHours = (value) => {
 
     const number = Number(value);
 
-    if (Number.isNaN(number)) {
+    if (!Number.isFinite(number)) {
         return "0h";
     }
 
-    return `${number}h`;
+    const rounded = Math.round(
+        (number + Number.EPSILON) * 100
+    ) / 100;
+
+    return `${rounded}h`;
 };
-
-/* ============================================================
-   FORMAT DATE
-============================================================ */
-
+// Format a detail-view date.
 const formatDetailDate = (value) => {
     if (!value) {
         return "--";
@@ -177,10 +169,7 @@ const formatDetailDate = (value) => {
     );
 };
 
-/* ============================================================
-   FORMAT TIME
-============================================================ */
-
+// Convert a 24-hour time value to readable time.
 const formatTime = (value) => {
     if (!value) {
         return "--";
@@ -211,32 +200,7 @@ const formatTime = (value) => {
     )}:${minutes} ${period}`;
 };
 
-/* ============================================================
-   AUTH TOKEN
-============================================================ */
-
-const getAuthToken = () => {
-    return (
-        localStorage.getItem(
-            "access_token"
-        ) ||
-        localStorage.getItem(
-            "accessToken"
-        ) ||
-        localStorage.getItem(
-            "token"
-        ) ||
-        localStorage.getItem(
-            "authToken"
-        ) ||
-        ""
-    );
-};
-
-/* ============================================================
-   DEFAULT SUMMARY
-============================================================ */
-
+// Set safe initial values for dashboard summary cards.
 const DEFAULT_SUMMARY = {
     employees_submitted_today: 0,
     total_employees: 0,
@@ -245,15 +209,8 @@ const DEFAULT_SUMMARY = {
     total_hours_logged: 0,
 };
 
-/* ============================================================
-   WEEKLY TIMESHEET
-============================================================ */
-
+// Render the weekly admin timesheet dashboard.
 function WeeklyTimesheet() {
-    /* ==========================================================
-       WEEK
-    ========================================================== */
-
     const [weekStart, setWeekStart] =
         useState(() =>
             formatApiDate(
@@ -263,11 +220,6 @@ function WeeklyTimesheet() {
 
     const [weekEnd, setWeekEnd] =
         useState("");
-
-    /* ==========================================================
-       API DATA
-    ========================================================== */
-
     const [
         employees,
         setEmployees,
@@ -279,11 +231,6 @@ function WeeklyTimesheet() {
     ] = useState(
         DEFAULT_SUMMARY
     );
-
-    /* ==========================================================
-       UI STATE
-    ========================================================== */
-
     const [
         loading,
         setLoading,
@@ -293,11 +240,6 @@ function WeeklyTimesheet() {
         error,
         setError,
     ] = useState("");
-
-    /* ==========================================================
-       DETAIL POPUP STATE
-    ========================================================== */
-
     const [
         selectedDay,
         setSelectedDay,
@@ -318,10 +260,7 @@ function WeeklyTimesheet() {
         setDetailError,
     ] = useState("");
 
-    /* ==========================================================
-       WEEK DAYS
-    ========================================================== */
-
+    // Build Monday-to-Friday cells for the selected week.
     const weekDays = useMemo(() => {
         const start =
             parseDate(weekStart);
@@ -355,208 +294,113 @@ function WeeklyTimesheet() {
             }
         );
     }, [weekStart]);
-
-    /* ==========================================================
-       FETCH WEEKLY DASHBOARD
-    ========================================================== */
-
-    useEffect(() => {
+      // Fetch the selected week directly from the backend.
+    const loadWeeklyTimesheet = useCallback(async () => {
         let cancelled = false;
 
-        const loadWeeklyTimesheet =
-            async () => {
-                const requestKey =
-                    weekStart;
+        try {
+            setLoading(true);
+            setError("");
 
-                try {
-                    setLoading(true);
-                    setError("");
+            // API: GET weekly admin timesheet dashboard
+            // Purpose: Reload employees, summary, and weekly timesheet data
+            const requestKey = weekStart;
+            let requestPromise = dashboardRequests.get(requestKey);
 
-                    const token =
-                        getAuthToken();
-
-                    const params =
-                        new URLSearchParams();
-
-                    params.set(
-                        "period",
-                        "week"
-                    );
-
-                    params.set(
-                        "week_start",
-                        weekStart
-                    );
-
-                    const requestUrl =
-                        `${API_BASE_URL}/timesheet/admin/dashboard?${params.toString()}`;
-
-                    let requestPromise =
-                        dashboardRequests.get(
-                            requestKey
-                        );
-
-                    if (!requestPromise) {
-                        const headers = {
-                            "Content-Type":
-                                "application/json",
-                        };
-
-                        if (token) {
-                            headers.Authorization =
-                                `Bearer ${token}`;
+            if (!requestPromise) {
+                requestPromise = api
+                    .get("/timesheet/admin/dashboard", {
+                        params: {
+                            period: "week",
+                            week_start: weekStart,
+                        },
+                    })
+                    .then((response) => {
+                        if (!response.data) {
+                            throw new Error(
+                                "Unable to load weekly timesheet."
+                            );
                         }
 
-                        requestPromise =
-                            fetch(
-                                requestUrl,
-                                {
-                                    method: "GET",
-                                    headers,
-                                }
-                            )
-                                .then(
-                                    async (response) => {
-                                        if (
-                                            !response.ok
-                                        ) {
-                                            let message =
-                                                `Unable to load weekly timesheet (${response.status})`;
+                        return response.data;
+                    })
+                    .catch((error) => {
+                        const message =
+                            error?.response?.data?.detail ||
+                            `Unable to load weekly timesheet (${error?.response?.status || "unknown"})`;
 
-                                            try {
-                                                const errorData =
-                                                    await response.json();
-
-                                                if (
-                                                    typeof errorData?.detail ===
-                                                    "string"
-                                                ) {
-                                                    message =
-                                                        errorData.detail;
-                                                }
-                                            } catch {
-                                                // ignore
-                                            }
-
-                                            throw new Error(
-                                                message
-                                            );
-                                        }
-
-                                        return response.json();
-                                    }
-                                )
-                                .finally(() => {
-                                    dashboardRequests.delete(
-                                        requestKey
-                                    );
-                                });
-
-                        dashboardRequests.set(
-                            requestKey,
-                            requestPromise
-                        );
-                    }
-
-                    const data =
-                        await requestPromise;
-
-                    if (cancelled) {
-                        return;
-                    }
-
-                    /* WEEK END */
-
-                    setWeekEnd(
-                        data?.week_end || ""
-                    );
-
-                    /* SUMMARY */
-
-                    const apiSummary =
-                        data?.summary || {};
-
-                    setSummary({
-                        employees_submitted_today:
-                            Number(
-                                apiSummary.employees_submitted_today ||
-                                0
-                            ),
-
-                        total_employees:
-                            Number(
-                                apiSummary.total_employees ||
-                                0
-                            ),
-
-                        pending_approvals:
-                            Number(
-                                apiSummary.pending_approvals ||
-                                0
-                            ),
-
-                        approved_this_week_hours:
-                            Number(
-                                apiSummary.approved_this_week_hours ||
-                                0
-                            ),
-
-                        total_hours_logged:
-                            Number(
-                                apiSummary.total_hours_logged ||
-                                0
-                            ),
+                        throw new Error(message);
+                    })
+                    .finally(() => {
+                        dashboardRequests.delete(requestKey);
                     });
 
-                    /* EMPLOYEES */
+                dashboardRequests.set(requestKey, requestPromise);
+            }
 
-                    setEmployees(
-                        Array.isArray(
-                            data?.employees
-                        )
-                            ? data.employees
-                            : []
-                    );
-                } catch (err) {
-                    if (cancelled) {
-                        return;
-                    }
+            const data = await requestPromise;
 
-                    console.error(
-                        "Weekly Timesheet API Error:",
-                        err
-                    );
+            if (cancelled) {
+                return;
+            }
 
-                    setError(
-                        err?.message ||
-                        "Unable to load weekly timesheet."
-                    );
+            setWeekEnd(data?.week_end || "");
 
-                    setEmployees([]);
-
-                    setSummary(
-                        DEFAULT_SUMMARY
-                    );
-                } finally {
-                    if (!cancelled) {
-                        setLoading(false);
-                    }
-                }
+            const apiSummary = data?.summary || {};
+            const normalizedSummary = {
+                employees_submitted_today: Number(
+                    apiSummary.employees_submitted_today || 0
+                ),
+                total_employees: Number(
+                    apiSummary.total_employees || 0
+                ),
+                pending_approvals: Number(
+                    apiSummary.pending_approvals || 0
+                ),
+                approved_this_week_hours: Number(
+                    apiSummary.approved_this_week_hours || 0
+                ),
+                total_hours_logged: Number(
+                    apiSummary.total_hours_logged || 0
+                ),
             };
 
-        loadWeeklyTimesheet();
+            const loadedEmployees = Array.isArray(data?.employees)
+                ? data.employees
+                : [];
+
+            // Always use the latest backend response as the source of truth.
+            setSummary(normalizedSummary);
+            setEmployees(loadedEmployees);
+        } catch (err) {
+            if (cancelled) {
+                return;
+            }
+
+            console.error("Weekly Timesheet API Error:", err);
+
+            setError(
+                err?.message ||
+                "Unable to load weekly timesheet."
+            );
+            setEmployees([]);
+            setSummary(DEFAULT_SUMMARY);
+        } finally {
+            if (!cancelled) {
+                setLoading(false);
+            }
+        }
 
         return () => {
             cancelled = true;
         };
-    }, [
-        weekStart,
-    ]);
+    }, [weekStart]);
 
-    /* ============================================================
-       PREVIOUS WEEK
-    ============================================================ */
+    useEffect(() => {
+        loadWeeklyTimesheet();
+    }, [loadWeeklyTimesheet]);
 
+    // Move to the previous week.
     const handlePreviousWeek =
         () => {
             const currentDate =
@@ -578,11 +422,7 @@ function WeeklyTimesheet() {
 
             closeDetailPopup();
         };
-
-    /* ============================================================
-       NEXT WEEK
-    ============================================================ */
-
+    // Move to the next week.
     const handleNextWeek = () => {
         const currentDate =
             parseDate(weekStart);
@@ -601,11 +441,7 @@ function WeeklyTimesheet() {
 
         closeDetailPopup();
     };
-
-    /* ============================================================
-       CURRENT WEEK
-    ============================================================ */
-
+    // Return to the current week.
     const handleCurrentWeek =
         () => {
             const monday =
@@ -630,141 +466,111 @@ function WeeklyTimesheet() {
 
             closeDetailPopup();
         };
-
-    /* ============================================================
-       OPEN DAY DETAIL POPUP
-    ============================================================ */
-
+    // Open an existing day or a blank editor for an unlogged day.
     const handleDayClick = async (
         employee,
-        day
+        day,
+        dayKey
     ) => {
-        if (!day) {
-            return;
-        }
+        // Normalize missing day data before status checks.
+        const safeDay = day || {};
 
-        const status =
-            String(
-                day.status || ""
-            )
-                .toLowerCase()
-                .trim();
+        const weekDay = weekDays.find(
+            (item) => item.key === dayKey
+        );
 
-        /*
-          Missing has no day_entry_id.
-          Therefore no API call.
-        */
-
-        if (!day.id) {
-            return;
-        }
-
-        /*
-          Only actual timesheet entries
-          are allowed to open detail.
-        */
-
-        const clickableStatuses = [
-            "approved",
-            "submitted",
-            "pending_approval",
-            "pending",
-            "rejected",
-        ];
-
-        if (
-            !clickableStatuses.includes(
-                status
-            )
-        ) {
-            return;
-        }
+        const selectedDate =
+            safeDay.work_date ||
+            safeDay.date ||
+            weekDay?.date;
 
         setSelectedDay({
             employee,
-            day,
+            day: {
+                ...safeDay,
+                key: dayKey,
+                work_date:
+                    selectedDate
+                        ? formatApiDate(
+                            selectedDate instanceof Date
+                                ? selectedDate
+                                : parseDate(selectedDate)
+                        )
+                        : "",
+            },
         });
 
         setDayDetails(null);
         setDetailError("");
+        setDetailLoading(false);
+
+        // Create local details when no backend entry exists.
+        if (!safeDay.id) {
+            setDayDetails({
+                day_entry_id: null,
+                work_date:
+                    selectedDate
+                        ? formatApiDate(
+                            selectedDate instanceof Date
+                                ? selectedDate
+                                : parseDate(selectedDate)
+                        )
+                        : "",
+                status: "pending",
+                notes: "",
+                leave_type: "",
+                total_hours: 0,
+                projects: [],
+                activity_descriptions: [],
+                rejection_note: "",
+                is_unlogged: true,
+            });
+            return;
+        }
         setDetailLoading(true);
-
         try {
-            const token =
-                getAuthToken();
-
+            
             const requestKey =
-                String(day.id);
+                String(safeDay.id);
+
 
             let requestPromise =
-                dayDetailRequests.get(
-                    requestKey
-                );
+                dayDetailRequests.get(requestKey);
 
             if (!requestPromise) {
-                const headers = {
-                    "Content-Type":
-                        "application/json",
-                };
-
-                if (token) {
-                    headers.Authorization =
-                        `Bearer ${token}`;
-                }
-
-                requestPromise =
-                    fetch(
-                        `${API_BASE_URL}/timesheet/admin/timesheet/day/${encodeURIComponent(
-                            day.id
-                        )}`,
-                        {
-                            method: "GET",
-                            headers,
-                        }
+                requestPromise = api
+                    .get(
+                        `/timesheet/admin/timesheet/day/${encodeURIComponent(
+                            safeDay.id
+                        )}`
                     )
-                        .then(
-                            async (response) => {
-                                if (
-                                    !response.ok
-                                ) {
-                                    let message =
-                                        `Unable to load timesheet details (${response.status})`;
-
-                                    try {
-                                        const errorData =
-                                            await response.json();
-
-                                        if (
-                                            typeof errorData?.detail ===
-                                            "string"
-                                        ) {
-                                            message =
-                                                errorData.detail;
-                                        }
-                                    } catch {
-                                        // ignore
-                                    }
-
-                                    throw new Error(
-                                        message
-                                    );
-                                }
-
-                                return response.json();
-                            }
-                        )
-                        .finally(() => {
-                            dayDetailRequests.delete(
-                                requestKey
+                    .then((response) => {
+                        if (!response.data) {
+                            throw new Error(
+                                "Unable to load timesheet details."
                             );
-                        });
+                        }
+
+                        return response.data;
+                    })
+                    .catch((error) => {
+                        const message =
+                            error?.response?.data?.detail ||
+                            `Unable to load timesheet details (${error?.response?.status || "unknown"})`;
+
+                        throw new Error(message);
+                    })
+                    .finally(() => {
+                        dayDetailRequests.delete(
+                            requestKey
+                        );
+                    });
 
                 dayDetailRequests.set(
                     requestKey,
                     requestPromise
                 );
             }
-
             const data =
                 await requestPromise;
 
@@ -784,10 +590,17 @@ function WeeklyTimesheet() {
         }
     };
 
-    /* ============================================================
-       CLOSE POPUP
-    ============================================================ */
+    // Reload the selected week after an approval or rejection.
+    const handleDayStatusChange = async () => {
+        await loadWeeklyTimesheet();
+    };
 
+    // Reload the selected week after a successful day save.
+    const handleDaySaved = async () => {
+        await loadWeeklyTimesheet();
+    };
+
+    // Close and reset the detail popup state.
     function closeDetailPopup() {
         setSelectedDay(null);
         setDayDetails(null);
@@ -795,23 +608,17 @@ function WeeklyTimesheet() {
         setDetailLoading(false);
     }
 
-    /* ============================================================
-       ESCAPE KEY
-    ============================================================ */
-
     useEffect(() => {
         if (!selectedDay) {
-            return undefined;
+            return;
         }
 
-        const handleKeyDown =
-            (event) => {
-                if (
-                    event.key === "Escape"
-                ) {
-                    closeDetailPopup();
-                }
-            };
+        // Close the detail popup with Escape.
+        const handleKeyDown = (event) => {
+            if (event.key === "Escape") {
+                closeDetailPopup();
+            }
+        };
 
         window.addEventListener(
             "keydown",
@@ -825,10 +632,6 @@ function WeeklyTimesheet() {
             );
         };
     }, [selectedDay]);
-
-    /* ============================================================
-       RENDER
-    ============================================================ */
 
     return (
         <>
@@ -845,108 +648,48 @@ function WeeklyTimesheet() {
             )}
 
             <div
-                className="
-          min-h-full
-          w-full
-          bg-white
-          px-9
-          py-8
-          text-slate-900
-        "
+                className="min-h-full w-full bg-white px-3 py-5 text-slate-900 sm:px-5 sm:py-6 md:px-6 md:py-7 lg:px-8 lg:py-8 xl:px-9"
             >
-
-                {/* ======================================================
-                    WEEK NAVIGATION
-                ====================================================== */}
-
-                <div
-                    className="
-            mb-8
-            flex
-            items-center
-            gap-4
-          "
-                >
+                <div className="mb-6 flex flex-wrap items-center gap-2 sm:mb-8 sm:gap-4">
                     <button
                         type="button"
-                        onClick={
-                            handlePreviousWeek
-                        }
+                        onClick={handlePreviousWeek}
                         disabled={loading}
                         aria-label="Previous week"
-                        className="
-              flex
-              h-7
-              w-7
-              items-center
-              justify-center
-              bg-transparent
-              text-[25px]
-              leading-none
-              text-slate-800
-              transition
-              hover:text-black
-              disabled:cursor-not-allowed
-              disabled:opacity-40
-            "
+                        className="flex h-7 w-7 shrink-0 items-center justify-center bg-transparent text-[22px] leading-none text-slate-800 transition hover:text-black disabled:cursor-not-allowed disabled:opacity-40 sm:text-[25px]"
                     >
                         ‹
                     </button>
 
                     <span
-                        className="
-              text-[15px]
-              font-medium
-              text-slate-700
-            "
+                        className="max-w-[calc(100vw-110px)] truncate text-center text-[13px] font-medium text-slate-700 sm:max-w-none sm:text-[15px]"
                     >
-                        {formatWeekRange(
-                            weekStart,
-                            weekEnd
-                        )}
+                        {formatWeekRange(weekStart, weekEnd)}
                     </span>
 
                     <button
                         type="button"
-                        onClick={
-                            handleNextWeek
-                        }
+                        onClick={handleNextWeek}
                         disabled={loading}
                         aria-label="Next week"
-                        className="
-              flex
-              h-7
-              w-7
-              items-center
-              justify-center
-              bg-transparent
-              text-[25px]
-              leading-none
-              text-slate-800
-              transition
-              hover:text-black
-              disabled:cursor-not-allowed
-              disabled:opacity-40
-            "
+                        className="flex h-7 w-7 shrink-0 items-center justify-center bg-transparent text-[22px] leading-none text-slate-800 transition hover:text-black disabled:cursor-not-allowed disabled:opacity-40 sm:text-[25px]"
                     >
                         ›
                     </button>
+                    {weekStart !==
+                        formatApiDate(getMonday(new Date())) && (
+                            <button
+                                type="button"
+                                onClick={handleCurrentWeek}
+                                disabled={loading}
+                                className="rounded-[4px] border border-[#ded4cf] bg-white px-4 py-2 text-[10px] font-medium text-[#3d332f] transition hover:bg-[#f8f6f2] disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
+                            >
+                                Current Week
+                            </button>
+                        )}
                 </div>
-
-                {/* ======================================================
-                    SUMMARY CARDS
-                ====================================================== */}
-
                 <div
-                    className="
-            mb-10
-            grid
-            w-full
-            grid-cols-1
-            gap-4
-            sm:grid-cols-2
-            xl:grid-cols-4
-          "
+                    className="mb-7 grid w-full grid-cols-1 gap-3 sm:mb-10 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4"
                 >
                     <SummaryCard
                         icon="☑"
@@ -980,80 +723,29 @@ function WeeklyTimesheet() {
                     />
                 </div>
 
-                {/* ======================================================
-                    ERROR
-                ====================================================== */}
-
                 {error && (
                     <div
-                        className="
-              mb-5
-              rounded-[4px]
-              border
-              border-[#ead2d2]
-              bg-[#fffafa]
-              px-4
-              py-3
-              text-[11px]
-              text-[#8b2d2d]
-            "
+                        className="mb-5 rounded-[4px] border border-[#ead2d2] bg-[#fffafa] px-4 py-3 text-[11px] text-[#8b2d2d]"
                     >
                         {error}
                     </div>
                 )}
 
-                {/* ======================================================
-                    TABLE
-                ====================================================== */}
-
                 <div
-                    className="
-            relative
-            w-full
-            overflow-x-auto
-            overflow-y-auto
-            border
-            border-[#e5d8d2]
-            bg-white
-          "
+                    className="relative w-full overflow-x-auto overflow-y-auto border border-[#e5d8d2] bg-white [-webkit-overflow-scrolling:touch]"
                 >
                     <table
-                        className="
-              w-full
-              min-w-[900px]
-              table-fixed
-              border-collapse
-            "
+                        className="w-full min-w-[760px] table-fixed border-collapse sm:min-w-[900px]"
                     >
-                        {/* ==================================================
-                            HEADER
-                        ================================================== */}
 
                         <thead
-                            className="
-                sticky
-                top-0
-                z-10
-              "
+                            className="sticky top-0 z-10"
                         >
                             <tr
-                                className="
-                  h-[62px]
-                  bg-[#eef3fd]
-                "
+                                className="h-[54px] bg-[#eef3fd] sm:h-[62px]"
                             >
                                 <th
-                                    className="
-                    w-[220px]
-                    border-b
-                    border-[#d9dce4]
-                    px-5
-                    text-left
-                    text-[10px]
-                    font-semibold
-                    tracking-[0.3px]
-                    text-[#17243b]
-                  "
+                                    className="w-[180px] border-b border-[#d9dce4] px-3 text-left text-[9px] font-semibold tracking-[0.3px] text-[#17243b] sm:w-[220px] sm:px-5 sm:text-[10px]"
                                 >
                                     EMPLOYEE
                                 </th>
@@ -1064,16 +756,7 @@ function WeeklyTimesheet() {
                                             key={
                                                 day.key
                                             }
-                                            className="
-                         border-b
-                         border-[#d9dce4]
-                         px-3
-                         text-center
-                         text-[10px]
-                         font-semibold
-                         tracking-[0.3px]
-                         text-[#17243b]
-                      "
+                                            className="border-b border-[#d9dce4] px-2 text-center text-[9px] font-semibold tracking-[0.3px] text-[#17243b] sm:px-3 sm:text-[10px]"
                                         >
                                             <div>
                                                 {
@@ -1082,12 +765,7 @@ function WeeklyTimesheet() {
                                             </div>
 
                                             <div
-                                                className="
-                          mt-1
-                          text-[9px]
-                          font-medium
-                          text-slate-500
-                        "
+                                                className="mt-1 text-[9px] font-medium text-slate-500"
                                             >
                                                 {
                                                     day.dateNumber
@@ -1098,17 +776,7 @@ function WeeklyTimesheet() {
                                 )}
 
                                 <th
-                                    className="
-                    w-[100px]
-                    border-b
-                    border-[#d9dce4]
-                    px-3
-                    text-center
-                    text-[10px]
-                    font-semibold
-                    tracking-[0.3px]
-                    text-[#17243b]
-                  "
+                                    className="w-[82px] border-b border-[#d9dce4] px-2 text-center text-[9px] font-semibold tracking-[0.3px] text-[#17243b] sm:w-[100px] sm:px-3 sm:text-[10px]"
                                 >
                                     WEEKLY
                                     <br />
@@ -1117,15 +785,11 @@ function WeeklyTimesheet() {
                             </tr>
                         </thead>
 
-                        {/* ==================================================
-                            BODY
-                        ================================================== */}
-
                         <tbody>
                             {loading ? (
                                 <LoadingRows />
                             ) : employees.length >
-                              0 ? (
+                                0 ? (
                                 employees.map(
                                     (employee) => (
                                         <EmployeeRow
@@ -1145,14 +809,7 @@ function WeeklyTimesheet() {
                                 <tr>
                                     <td
                                         colSpan={7}
-                                        className="
-                      h-[150px]
-                      border-b
-                      border-[#e5d8d2]
-                      text-center
-                      text-[13px]
-                      text-slate-400
-                    "
+                                        className="h-[150px] border-b border-[#e5d8d2] text-center text-[13px] text-slate-400"
                                     >
                                         No employees found
                                     </td>
@@ -1162,116 +819,29 @@ function WeeklyTimesheet() {
                     </table>
                 </div>
 
-                {/* ======================================================
-                    FOOTER
-                ====================================================== */}
-
-                <div
-                    className="
-            flex
-            flex-col
-            items-center
-            pt-5
-          "
-                >
-                    <div
-                        className="
-              mb-4
-              flex
-              gap-1.5
-            "
-                    >
-                        <span
-                            className="
-                h-1.5
-                w-1.5
-                rounded-full
-                bg-[#aaa]
-              "
-                        />
-
-                        <span
-                            className="
-                h-1.5
-                w-1.5
-                rounded-full
-                bg-[#aaa]
-              "
-                        />
-
-                        <span
-                            className="
-                h-1.5
-                w-1.5
-                rounded-full
-                bg-[#aaa]
-              "
-                        />
-                    </div>
-
-                    <span
-                        className="
-              text-[9px]
-              text-[#a8a8a8]
-            "
-                    >
-                        Scrolling through
-                        100+ employees...
-                    </span>
-
-                    <button
-                        type="button"
-                        onClick={
-                            handleCurrentWeek
-                        }
-                        disabled={loading}
-                        className="
-              mt-5
-              rounded-[4px]
-              border
-              border-[#ded4cf]
-              bg-white
-              px-4
-              py-2
-              text-[10px]
-              font-medium
-              text-[#3d332f]
-              transition
-              hover:bg-[#f8f6f2]
-              disabled:cursor-not-allowed
-              disabled:opacity-50
-            "
-                    >
-                        Current Week
-                    </button>
-                </div>
             </div>
-
-            {/* ========================================================
-                DAY DETAIL POPUP
-            ======================================================== */}
 
             {selectedDay && (
                 <TimesheetDetailModal
+                    key={`${selectedDay?.employee?.employee_code || ""}-${selectedDay?.day?.key || ""}-${selectedDay?.day?.id || "new"}`}
                     selectedDay={selectedDay}
                     details={dayDetails}
                     loading={detailLoading}
                     error={detailError}
                     onClose={closeDetailPopup}
-                    API_BASE_URL={API_BASE_URL}
+                    onSaved={handleDaySaved}
+                    onStatusChange={handleDayStatusChange}
                     formatHours={formatHours}
                     formatDetailDate={formatDetailDate}
                     formatTime={formatTime}
+                    isFinalized={selectedDay?.employee?.is_finalized === true}
                 />
             )}
         </>
     );
 }
 
-/* ============================================================
-   SUMMARY CARD
-============================================================ */
-
+// Render one dashboard summary card.
 function SummaryCard({
     icon,
     title,
@@ -1280,32 +850,9 @@ function SummaryCard({
 }) {
     return (
         <div
-            className="
-        relative
-        flex
-        min-h-[125px]
-        w-full
-        flex-col
-        justify-between
-        rounded-[4px]
-        border
-        border-[#e5d8d2]
-        bg-white
-        px-5
-        py-4
-      "
-        >
+            className="relative flex min-h-[112px] w-full flex-col justify-between rounded-[4px] border border-[#e5d8d2] bg-white px-4 py-3 transition-all duration-300 ease-out hover:-translate-y-1 hover:scale-[1.02] hover:shadow-[0_10px_25px_rgba(77,139,79,0.16)] sm:min-h-[125px] sm:px-5 sm:py-4"        >
             <div
-                className="
-          flex
-          h-7
-          w-7
-          items-center
-          justify-center
-          bg-[#f1f5fb]
-          text-[14px]
-          text-slate-800
-        "
+                className="flex h-7 w-7 items-center justify-center bg-[#f1f5fb] text-[14px] text-slate-800"
             >
                 {icon}
             </div>
@@ -1313,37 +860,20 @@ function SummaryCard({
             <div className="relative">
                 {live && (
                     <span
-                        className="
-              absolute
-              bottom-9
-              right-0
-              text-[10px]
-              font-bold
-              text-[#3b8a57]
-            "
+                        className="absolute bottom-9 right-0 text-[10px] font-bold text-[#3b8a57]"
                     >
                         LIVE
                     </span>
                 )}
 
                 <div
-                    className="
-             mb-1.5
-             text-[10px]
-             font-semibold
-             tracking-[0.2px]
-             text-slate-600
-          "
+                    className="mb-1.5 text-[10px] font-semibold tracking-[0.2px] text-slate-600"
                 >
                     {title}
                 </div>
 
                 <div
-                    className="
-             text-[21px]
-             font-semibold
-             text-[#0b1b35]
-          "
+                    className="text-[21px] font-semibold text-[#0b1b35]"
                 >
                     {value}
                 </div>
@@ -1352,10 +882,7 @@ function SummaryCard({
     );
 }
 
-/* ============================================================
-   EMPLOYEE ROW
-============================================================ */
-
+// Render one employee and their weekday cells.
 function EmployeeRow({
     employee,
     onDayClick,
@@ -1370,39 +897,20 @@ function EmployeeRow({
 
     return (
         <tr
-            className="
-        h-[70px]
-        transition-colors
-        hover:bg-[#fcfcfd]
-      "
+            className="h-[60px] transition-colors hover:bg-[#fcfcfd] sm:h-[70px]"
         >
-            {/* EMPLOYEE */}
 
             <td
-                className="
-          border-b
-          border-[#e5d8d2]
-          px-5
-        "
+                className="border-b border-[#e5d8d2] px-3 sm:px-5"
             >
                 <div
-                    className="
-            flex
-            items-center
-            gap-3
-          "
+                    className="flex items-center gap-2 sm:gap-3"
                 >
                     {employee.avatar_url ? (
                         <img
-                            src={`${API_BASE_URL}${employee.avatar_url}`}
+                            src={`${import.meta.env.VITE_API_BASE_URL}${employee.avatar_url}`}
                             alt=""
-                            className="
-                h-7
-                w-7
-                flex-shrink-0
-                rounded-full
-                object-cover
-              "
+                            className="h-6 w-6 flex-shrink-0 rounded-full object-cover sm:h-7 sm:w-7"
                             onError={(
                                 event
                             ) => {
@@ -1412,20 +920,7 @@ function EmployeeRow({
                         />
                     ) : (
                         <div
-                            className="
-      flex
-      h-7
-      w-7
-      flex-shrink-0
-      items-center
-      justify-center
-      rounded-full
-      bg-[#f1f5f9]
-      text-[10px]
-      font-semibold
-      uppercase
-      text-[#002B5B]
-    "
+                            className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-[#f1f5f9] text-[9px] font-semibold uppercase text-[#002B5B] sm:h-7 sm:w-7 sm:text-[10px]"
                         >
                             {(employee?.employee_name || "--")
                                 .trim()
@@ -1441,12 +936,7 @@ function EmployeeRow({
 
                     <div>
                         <div
-                            className="
-                whitespace-nowrap
-                text-[12px]
-                font-semibold
-                text-[#17243b]
-              "
+                            className="max-w-[120px] truncate whitespace-nowrap text-[11px] font-semibold text-[#17243b] sm:max-w-none sm:text-[12px]"
                         >
                             {
                                 employee.employee_name
@@ -1454,11 +944,7 @@ function EmployeeRow({
                         </div>
 
                         <div
-                            className="
-                mt-1
-                text-[9px]
-                text-[#7b8492]
-              "
+                            className="mt-1 text-[8px] text-[#7b8492] sm:text-[9px]"
                         >
                             {
                                 employee.employee_code
@@ -1468,30 +954,24 @@ function EmployeeRow({
                 </div>
             </td>
 
-            {/* DAYS */}
-
             {dayKeys.map(
                 (dayKey) => {
                     const day =
                         employee.days?.[
-                            dayKey
+                        dayKey
                         ];
 
                     return (
                         <td
                             key={dayKey}
-                            className="
-                border-b
-                border-[#e5d8d2]
-                px-3
-                text-center
-              "
+                            className="border-b border-[#e5d8d2] px-2 text-center sm:px-3"
                         >
                             <TimesheetCell
                                 day={day}
                                 employee={
                                     employee
                                 }
+                                dayKey={dayKey}
                                 onClick={
                                     onDayClick
                                 }
@@ -1501,18 +981,8 @@ function EmployeeRow({
                 }
             )}
 
-            {/* WEEKLY TOTAL */}
-
             <td
-                className="
-          border-b
-          border-[#e5d8d2]
-          px-3
-          text-center
-          text-[13px]
-          font-bold
-          text-[#0b1b35]
-        "
+                className="border-b border-[#e5d8d2] px-2 text-center text-[12px] font-bold text-[#0b1b35] sm:px-3 sm:text-[13px]"
             >
                 {formatHours(
                     employee.weekly_total
@@ -1522,54 +992,84 @@ function EmployeeRow({
     );
 }
 
-/* ============================================================
-   TIMESHEET CELL
-============================================================ */
-
+// Render a weekday cell based on its current status.
 function TimesheetCell({
     day,
     employee,
+    dayKey,
     onClick,
 }) {
-    if (!day) {
+    const safeDay = day || {};
+
+    const status = String(
+        day?.status || ""
+    )
+        .toLowerCase()
+        .trim();
+
+    const canOpen = true;
+
+    // LEAVE — check BEFORE !day.id
+    if (
+        status === "leave" ||
+        status === "on_leave"
+    ) {
         return (
             <Cell
-                className="
-          border-[#d8dce4]
-          bg-[#f5f6f8]
-          text-[#7a8290]
-        "
+                small
+                clickable={false}
+                className="border-[#20a4f3] bg-[#eaf7ff] text-[#008bd2]"
             >
-                --
+                LEAVE
             </Cell>
         );
     }
 
-    const status =
-        String(
-            day.status || ""
-        )
-            .toLowerCase()
-            .trim();
+    // HOLIDAY — check BEFORE !day.id
+    if (
+        status === "holiday" ||
+        status === "public_holiday" ||
+        status === "publicholiday"
+    ) {
+        return (
+            <Cell
+                small
+                clickable={false}
+                className="border-[#a66cff] bg-[#f3edff] text-[#7c3aed]"
+            >
+                HOLIDAY
+            </Cell>
+        );
+    }
 
-    const hasEntry =
-        Boolean(day.id);
+    // UNLOGGED / MISSING
+    if (
+        !day ||
+        status === "missing" ||
+        !day.id
+    ) {
+        return (
+            <Cell
+                clickable
+                onClick={() =>
+                    onClick(
+                        employee,
+                        safeDay,
+                        dayKey
+                    )
+                }
+                className="border-[#d8dce4] bg-[#f5f6f8] text-[#7a8290]"
+            >
+                {safeDay.hours !== null &&
+                    safeDay.hours !== undefined &&
+                    safeDay.hours !== ""
+                    ? formatHours(safeDay.hours)
+                    : "--"}
+            </Cell>
+        );
+    }
 
-    const canOpen =
-        hasEntry &&
-        [
-            "approved",
-            "submitted",
-            "pending_approval",
-            "pending",
-            "rejected",
-        ].includes(status);
-
-    /* ==========================================================
-       APPROVED
-       GREEN
-    ========================================================== */
-
+    // APPROVED
     if (
         status === "approved" &&
         day.hours !== null &&
@@ -1579,31 +1079,20 @@ function TimesheetCell({
             <Cell
                 clickable={canOpen}
                 onClick={() =>
-                    onClick(employee, day)
+                    onClick(
+                        employee,
+                        day,
+                        dayKey
+                    )
                 }
-                className="
-          border-[#78a66f]
-          bg-[#f2faef]
-          text-[#28612d]
-        "
+                className="border-[#78a66f] bg-[#f2faef] text-[#28612d]"
             >
-                {formatHours(
-                    day.hours
-                )}
+                {formatHours(day.hours)}
             </Cell>
         );
     }
 
-    /* ==========================================================
-       SUBMITTED / PENDING APPROVAL
-       YELLOW
-
-       Backend currently sends:
-       status: "submitted"
-
-       So submitted MUST be yellow.
-    ========================================================== */
-
+    // SUBMITTED / PENDING
     if (
         status === "submitted" ||
         status === "pending_approval" ||
@@ -1613,159 +1102,65 @@ function TimesheetCell({
             <Cell
                 clickable={canOpen}
                 onClick={() =>
-                    onClick(employee, day)
+                    onClick(
+                        employee,
+                        day,
+                        dayKey
+                    )
                 }
-                className="
-          border-[#e5b900]
-          bg-[#fff8d9]
-          text-[#885900]
-        "
+                className="border-[#e5b900] bg-[#fff8d9] text-[#885900]"
             >
                 {day.hours !== null &&
                     day.hours !== undefined
-                    ? formatHours(
-                        day.hours
-                    )
+                    ? formatHours(day.hours)
                     : "PENDING"}
             </Cell>
         );
     }
 
-    /* ==========================================================
-       REJECTED
-       RED
-    ========================================================== */
-
-    if (
-        status === "rejected"
-    ) {
+    // REJECTED
+    if (status === "rejected") {
         return (
             <Cell
                 clickable={canOpen}
                 onClick={() =>
-                    onClick(employee, day)
+                    onClick(
+                        employee,
+                        day,
+                        dayKey
+                    )
                 }
-                className="
-          border-[#ef5555]
-          bg-[#ffe8e8]
-          text-[#c52222]
-        "
+                className="border-[#ef5555] bg-[#ffe8e8] text-[#c52222]"
             >
                 {day.hours !== null &&
                     day.hours !== undefined
-                    ? formatHours(
-                        day.hours
-                    )
+                    ? formatHours(day.hours)
                     : "REJECTED"}
             </Cell>
         );
     }
 
-    /* ==========================================================
-       LEAVE
-       PINK
-    ========================================================== */
-
-    if (
-        status === "leave" ||
-        status === "on_leave"
-    ) {
-        return (
-            <Cell
-                small
-                className="
-          border-[#f47ab8]
-          bg-[#fff0f7]
-          text-[#bd216d]
-        "
-            >
-                {day.leave_type ||
-                    "LEAVE"}
-            </Cell>
-        );
-    }
-
-    /* ==========================================================
-       HOLIDAY
-       BLUE
-    ========================================================== */
-
-    if (
-        status === "holiday" ||
-        status ===
-        "public_holiday" ||
-        status ===
-        "publicholiday"
-    ) {
-        return (
-            <Cell
-                small
-                className="
-          border-[#4f8fff]
-          bg-[#e3edff]
-          text-[#1453c4]
-        "
-            >
-                HOLIDAY
-            </Cell>
-        );
-    }
-
-    /* ==========================================================
-       MISSING
-       GRAY
-    ========================================================== */
-
-    if (
-        status === "missing"
-    ) {
-        return (
-            <Cell
-                className="
-          border-[#d8dce4]
-          bg-[#f5f6f8]
-          text-[#7a8290]
-        "
-            >
-                --
-            </Cell>
-        );
-    }
-
-    /* ==========================================================
-       FALLBACK
-    ========================================================== */
-
+    // DEFAULT
     return (
         <Cell
             clickable={canOpen}
             onClick={() =>
-                canOpen &&
                 onClick(
                     employee,
-                    day
+                    day,
+                    dayKey
                 )
             }
-            className="
-        border-[#d8dce4]
-        bg-[#f5f6f8]
-        text-[#7a8290]
-      "
+            className="border-[#d8dce4] bg-[#f5f6f8] text-[#7a8290]"
         >
             {day.hours !== null &&
                 day.hours !== undefined
-                ? formatHours(
-                    day.hours
-                )
+                ? formatHours(day.hours)
                 : "--"}
         </Cell>
     );
 }
-
-/* ============================================================
-   CELL
-============================================================ */
-
+// Render a reusable clickable or read-only day cell.
 function Cell({
     children,
     className = "",
@@ -1803,40 +1198,14 @@ function Cell({
                     }
                     : undefined
             }
-            className={`
-        mx-auto
-        flex
-        h-[39px]
-        w-[76px]
-        items-center
-        justify-center
-        rounded-[4px]
-        border
-        text-center
-        transition-all
-
-        ${clickable
-                    ? "cursor-pointer hover:-translate-y-[1px] hover:shadow-[0_3px_8px_rgba(15,23,42,0.10)] active:translate-y-0"
-                    : ""
-                }
-
-        ${small
-                    ? "px-1 text-[9px] font-bold"
-                    : "text-[11px] font-medium"
-                }
-
-        ${className}
-      `}
+            className={`mx-auto flex h-[34px] w-[64px] sm:h-[39px] sm:w-[76px] items-center justify-center rounded-[4px] border text-center transition-all ${clickable ? "cursor-pointer hover:-translate-y-[1px] hover:shadow-[0_3px_8px_rgba(15,23,42,0.10)] active:translate-y-0" : ""} ${small ? "px-1 text-[9px] font-bold" : "text-[11px] font-medium"} ${className} `}
         >
             {children}
         </div>
     );
 }
 
-/* ============================================================
-   LOADING ROWS
-============================================================ */
-
+// Render skeleton rows while dashboard data loads.
 function LoadingRows() {
     return (
         <>
@@ -1844,74 +1213,35 @@ function LoadingRows() {
                 (row) => (
                     <tr
                         key={row}
-                        className="
-              h-[70px]
-            "
+                        className="h-[60px] sm:h-[70px]"
                     >
-                        {/* EMPLOYEE */}
 
                         <td
-                            className="
-                border-b
-                border-[#e5d8d2]
-                px-5
-              "
+                            className="border-b border-[#e5d8d2] px-3 sm:px-5"
                         >
                             <div
-                                className="
-                  h-5
-                  w-32
-                  animate-pulse
-                  rounded
-                  bg-slate-100
-                "
+                                className="h-5 w-32 animate-pulse rounded bg-slate-100"
                             />
                         </td>
-
-                        {/* DAYS */}
 
                         {[1, 2, 3, 4, 5].map(
                             (item) => (
                                 <td
                                     key={item}
-                                    className="
-                    border-b
-                    border-[#e5d8d2]
-                    px-3
-                  "
+                                    className="border-b border-[#e5d8d2] px-3"
                                 >
                                     <div
-                                        className="
-                      mx-auto
-                      h-[39px]
-                      w-[76px]
-                      animate-pulse
-                      rounded-[4px]
-                      bg-slate-100
-                    "
+                                        className="mx-auto h-[34px] w-[64px] animate-pulse rounded-[4px] bg-slate-100 sm:h-[39px] sm:w-[76px]"
                                     />
                                 </td>
                             )
                         )}
 
-                        {/* TOTAL */}
-
                         <td
-                            className="
-                border-b
-                border-[#e5d8d2]
-                px-3
-              "
+                            className="border-b border-[#e5d8d2] px-3"
                         >
                             <div
-                                className="
-                  mx-auto
-                  h-5
-                  w-10
-                  animate-pulse
-                  rounded
-                  bg-slate-100
-                "
+                                className="mx-auto h-5 w-9 animate-pulse rounded bg-slate-100 sm:w-10"
                             />
                         </td>
                     </tr>

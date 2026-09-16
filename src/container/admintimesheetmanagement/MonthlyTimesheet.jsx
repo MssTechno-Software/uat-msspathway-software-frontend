@@ -3,29 +3,9 @@ import React, {
     useMemo,
     useState,
 } from "react";
-
-import EmployeeSummaryDrawer from "./EmployeeSummaryDrawer";
-
-/* ============================================================
-   API CONFIG
-============================================================ */
-
-const API_BASE_URL =
-    import.meta.env.VITE_API_BASE_URL ||
-    "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app";
-
-/* ============================================================
-   AUTH TOKEN
-============================================================ */
-
-const getAuthToken = () => {
-    return (
-        localStorage.getItem("accessToken") ||
-        localStorage.getItem("token") ||
-        localStorage.getItem("authToken") ||
-        ""
-    );
-};
+import { FiLoader } from "react-icons/fi";
+import { useNavigate } from "react-router-dom";
+import api from "../../api/axios";
 
 /* ============================================================
    DEFAULT DATA
@@ -95,6 +75,7 @@ const changeMonth = (
 ============================================================ */
 
 function MonthlyTimesheet() {
+    const navigate = useNavigate();
     /* ==========================================================
        MONTH
     ========================================================== */
@@ -132,14 +113,7 @@ function MonthlyTimesheet() {
         setError,
     ] = useState("");
 
-    /* ==========================================================
-       DRAWER STATE
-    ========================================================== */
 
-    const [
-        selectedEmployee,
-        setSelectedEmployee,
-    ] = useState(null);
 
     /* ==========================================================
        FETCH MONTHLY DASHBOARD
@@ -155,67 +129,22 @@ function MonthlyTimesheet() {
                     setLoading(true);
                     setError("");
 
-                    const token =
-                        getAuthToken();
-
-                    const params =
-                        new URLSearchParams();
-
-                    params.set(
-                        "month",
-                        month
-                    );
-
-                    const requestUrl =
-                        `${API_BASE_URL}/timesheet/admin/dashboard/monthly?${params.toString()}`;
-
-                    const headers = {
-                        "Content-Type":
-                            "application/json",
-                    };
-
-                    if (token) {
-                        headers.Authorization =
-                            `Bearer ${token}`;
-                    }
-
+                    // API: GET monthly admin dashboard
+                    // Purpose: Load monthly summary and employee timesheet data
                     const response =
-                        await fetch(
-                            requestUrl,
+                        await api.get(
+                            "/timesheet/admin/dashboard/monthly",
                             {
-                                method: "GET",
-                                headers,
+                                params: {
+                                    month,
+                                },
                                 signal:
                                     controller.signal,
                             }
                         );
 
-                    if (!response.ok) {
-                        let message =
-                            `Unable to load monthly timesheet (${response.status})`;
-
-                        try {
-                            const errorData =
-                                await response.json();
-
-                            if (
-                                typeof errorData?.detail ===
-                                "string"
-                            ) {
-                                message =
-                                    errorData.detail;
-                            }
-                        } catch {
-                            // Ignore invalid error response
-                        }
-
-                        throw new Error(
-                            message
-                        );
-                    }
-
                     const data =
-                        await response.json();
+                        response.data;
 
                     /* ================================================
                        SUMMARY
@@ -269,8 +198,7 @@ function MonthlyTimesheet() {
                     );
                 } catch (err) {
                     if (
-                        err?.name ===
-                        "AbortError"
+                        controller.signal.aborted
                     ) {
                         return;
                     }
@@ -280,9 +208,14 @@ function MonthlyTimesheet() {
                         err
                     );
 
+                    const message =
+                        err?.response?.data?.detail ||
+                        `Unable to load monthly timesheet (${err?.response?.status || "unknown"})`;
+
                     setError(
-                        err?.message ||
-                        "Unable to load monthly timesheet."
+                        typeof message === "string"
+                            ? message
+                            : "Unable to load monthly timesheet."
                     );
 
                     setEmployees([]);
@@ -347,7 +280,6 @@ function MonthlyTimesheet() {
     /* ==========================================================
        STATUS
     ========================================================== */
-
     const getStatusClass = (
         status
     ) => {
@@ -357,43 +289,28 @@ function MonthlyTimesheet() {
                 .replace(/\s+/g, "_");
 
         if (
-            normalized ===
-            "complete" ||
-            normalized ===
-            "completed"
+            normalized === "finalized"
         ) {
             return `
-                bg-[#d9f7d4]
-                text-[#3c8a37]
-            `;
+            bg-[#4D8B4F]
+            text-white
+        `;
         }
 
         if (
-            normalized ===
-            "action_required" ||
-            normalized ===
-            "actionrequired"
+            normalized === "action_required" ||
+            normalized === "actionrequired"
         ) {
             return `
-                bg-[#4b2115]
-                text-white
-            `;
-        }
-
-        if (
-            normalized ===
-            "pending_approval"
-        ) {
-            return `
-                bg-[#fff4c7]
-                text-[#8a6500]
-            `;
+            bg-[#4b2115]
+            text-white
+        `;
         }
 
         return `
-            bg-[#eef1f5]
-            text-[#536174]
-        `;
+        bg-[#eef1f5]
+        text-[#536174]
+    `;
     };
 
     /* ==========================================================
@@ -402,12 +319,24 @@ function MonthlyTimesheet() {
 
     return (
         <>
+          {loading && (
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40">
+                <div className="flex flex-col items-center gap-3 p-6">
+                    <FiLoader className="animate-spin text-4xl text-green-700" />
+
+                    <p className="font-medium text-gray-700">
+                        Please wait...
+                    </p>
+                </div>
+            </div>
+        )}
             <div
                 className="
                     min-h-full
                     w-full
+                    min-w-0
                     bg-transparent
-                    px-4
+                    px-3
                     pt-0
                     pb-6
                     sm:px-6
@@ -422,10 +351,13 @@ function MonthlyTimesheet() {
                     className="
                         mb-7
                         flex
+                        flex-wrap
                         items-center
                         justify-end
-                        gap-4
-                        -mt-[38px]
+                        gap-2
+                        -mt-[20px]
+                        sm:gap-4
+                        sm:-mt-[38px]
                     "
                 >
                     {/* MONTH NAVIGATION */}
@@ -433,8 +365,11 @@ function MonthlyTimesheet() {
                     <div
                         className="
                             flex
+                            flex-wrap
                             items-center
-                            gap-3
+                            justify-end
+                            gap-1.5
+                            sm:gap-3
                         "
                     >
                         {/* PREVIOUS MONTH */}
@@ -447,10 +382,13 @@ function MonthlyTimesheet() {
                             disabled={loading}
                             className="
                                 flex
-                                h-9
-                                w-9
+                                h-8
+                                w-8
+                                shrink-0
                                 items-center
                                 justify-center
+                                sm:h-9
+                                sm:w-9
                                 rounded-md
                                 text-lg
                                 text-[#0b1b35]
@@ -475,10 +413,15 @@ function MonthlyTimesheet() {
                             }
                             disabled={loading}
                             className="
-                                h-9
-                                min-w-[130px]
+                                h-8
+                                w-[132px]
+                                min-w-0
                                 rounded-md
+                                cursor-pointer
                                 border
+                                sm:h-9
+                                sm:w-auto
+                                sm:min-w-[130px]
                                 border-[#ddd6d1]
                                 bg-white
                                 px-3
@@ -532,10 +475,13 @@ function MonthlyTimesheet() {
                             disabled={loading}
                             className="
                                 flex
-                                h-9
-                                w-9
+                                h-8
+                                w-8
+                                shrink-0
                                 items-center
                                 justify-center
+                                sm:h-9
+                                sm:w-9
                                 rounded-md
                                 text-lg
                                 text-[#0b1b35]
@@ -563,8 +509,9 @@ function MonthlyTimesheet() {
                                 border
                                 border-[#ddd6d1]
                                 bg-white
-                                px-4
+                                px-3
                                 py-2
+                                sm:px-4
                                 text-[12px]
                                 font-medium
                                 text-[#6b2d1a]
@@ -615,7 +562,7 @@ function MonthlyTimesheet() {
                     "
                 >
                     <SummaryCard
-                        icon="♙"
+                        icon="👤︎"
                         title="TOTAL EMPLOYEES"
                         value={
                             summary.total_employees
@@ -633,8 +580,8 @@ function MonthlyTimesheet() {
                                 ? `Avg. ${(
                                     summary.total_hours_logged /
                                     summary.total_employees
-                                ).toFixed(1)}h / emp`
-                                : "Avg. 0h / emp"
+                                ).toFixed(1)}h / employee`
+                                : "Avg. 0h / employee"
                         }
                     />
 
@@ -686,7 +633,10 @@ function MonthlyTimesheet() {
                 <div
                     className="
                         w-full
+                        min-w-0
                         overflow-x-auto
+                        overscroll-x-contain
+                        touch-pan-x
                         rounded-md
                         border
                         border-[#e5d6ce]
@@ -719,6 +669,7 @@ function MonthlyTimesheet() {
                                 <th
                                     className="
                 w-[230px]
+                min-w-[230px]
                 whitespace-nowrap
                 border-b
                 border-[#d9dce4]
@@ -827,11 +778,22 @@ function MonthlyTimesheet() {
                                             getStatusClass={
                                                 getStatusClass
                                             }
-                                            onProfileClick={() =>
-                                                setSelectedEmployee(
-                                                    employee
-                                                )
-                                            }
+                                            onProfileClick={() => {
+                                                const role = localStorage
+                                                    .getItem("role")
+                                                    ?.toLowerCase()
+                                                    ?.trim();
+
+                                                if (role === "super admin") {
+                                                    navigate(
+                                                        `/dashboard/work-approval/timesheet/employee/${employee.employee_code}?month=${month}&view=monthly`
+                                                    );
+                                                } else {
+                                                    navigate(
+                                                        `/super-admin-dashboard/work-approval/timesheet/employee/${employee.employee_code}?month=${month}&view=monthly`
+                                                    );
+                                                }
+                                            }}
                                         />
                                     )
                                 )
@@ -860,21 +822,7 @@ function MonthlyTimesheet() {
                 </div>
             </div>
 
-            {/* ============================================================
-                EMPLOYEE DRAWER
-            ============================================================ */}
 
-            {selectedEmployee && (
-                <EmployeeSummaryDrawer
-                    employeeCode={
-                        selectedEmployee.employee_code
-                    }
-                    month={month}
-                    onClose={() =>
-                        setSelectedEmployee(null)
-                    }
-                />
-            )}
         </>
     );
 }
@@ -893,13 +841,24 @@ function SummaryCard({
     return (
         <div
             className="
+                group
+                w-full
                 min-w-0
+                max-w-full
                 rounded-md
                 border
                 border-[#e5d6ce]
                 bg-white
                 px-6
                 py-5
+                transition-all
+                duration-300
+                ease-out
+                hover:-translate-y-1
+                hover:scale-[1.02]
+                hover:shadow-[0_14px_30px_rgba(77,139,79,0.14)]
+                motion-reduce:transition-none
+                motion-reduce:hover:transform-none
             "
         >
             <div
@@ -1003,15 +962,17 @@ function EmployeeRow({
         >
             {/* EMPLOYEE */}
 
-            <td className="px-5 py-4">
+            <td className="px-4 py-4 sm:px-5">
                 <button
                     type="button"
                     onClick={onProfileClick}
                     className="
                         flex
+                        min-w-0
                         items-center
-                        gap-3
+                        gap-2
                         text-left
+                        sm:gap-3
                         outline-none
                         cursor-pointer
                     "
@@ -1026,7 +987,7 @@ function EmployeeRow({
                                     "http"
                                 )
                                     ? avatarUrl
-                                    : `${API_BASE_URL}${avatarUrl}`
+                                    : `${api.defaults.baseURL || ""}${avatarUrl}`
                             }
                             alt={
                                 employeeName
@@ -1055,6 +1016,8 @@ function EmployeeRow({
                                 justify-center
                                 rounded-full
                                 bg-[#f1f4f8]
+                                min-w-0
+                                truncate
                                 text-[13px]
                                 font-semibold
                                 text-[#0b1b35]
@@ -1069,6 +1032,8 @@ function EmployeeRow({
 
                         <div
                             className="
+                                min-w-0
+                                truncate
                                 text-[13px]
                                 font-semibold
                                 text-[#0b1b35]
@@ -1082,6 +1047,7 @@ function EmployeeRow({
                         <div
                             className="
                                 mt-0.5
+                                truncate
                                 text-[11px]
                                 text-slate-500
                             "
@@ -1096,9 +1062,10 @@ function EmployeeRow({
 
             <td
                 className="
-                    px-4
+                    px-3
                     py-4
                     text-[13px]
+                    sm:px-4
                     text-[#17243b]
                 "
             >
@@ -1113,9 +1080,10 @@ function EmployeeRow({
 
             <td
                 className="
-                    px-4
+                    px-3
                     py-4
                     text-[13px]
+                    sm:px-4
                     text-[#17243b]
                 "
             >
@@ -1129,9 +1097,10 @@ function EmployeeRow({
 
             <td
                 className="
-                    px-4
+                    px-3
                     py-4
                     text-[13px]
+                    sm:px-4
                     text-[#17243b]
                 "
             >
@@ -1143,9 +1112,10 @@ function EmployeeRow({
 
             <td
                 className={`
-                    px-4
+                    px-3
                     py-4
                     text-[13px]
+                    sm:px-4
                     ${Number(
                     employee?.missing_dates ||
                     0
@@ -1165,24 +1135,29 @@ function EmployeeRow({
 
             {/* STATUS */}
 
-            <td className="px-4 py-4">
+            <td className="min-w-[100px] whitespace-nowrap px-3 py-4 sm:px-4">
                 <span
                     className={`
                         inline-flex
+                        shrink-0
+                        items-center
+                        justify-center
+                        whitespace-nowrap
                         rounded-full
-                        px-3
+                        px-2.5
                         py-1
-                        text-[11px]
+                        text-[9px]
+                        leading-tight
                         font-semibold
-                        ${getStatusClass(
-                        status
-                    )}
+                        sm:px-3
+                        sm:text-[11px]
+                        ${status === "Finalized" ? "ml-0 sm:ml-4" : ""}
+                        ${getStatusClass(status)}
                     `}
                 >
                     {status}
                 </span>
             </td>
-
         </tr>
     );
 }

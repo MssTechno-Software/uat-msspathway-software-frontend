@@ -1,9 +1,31 @@
 import React, { useState } from "react";
+import {
+  useSearchParams,
+} from "react-router-dom";
+
 import WeeklyTimesheet from "./WeeklyTimesheet";
 import MonthlyTimesheet from "./MonthlyTimesheet";
 
 function AdminTimesheetManagement() {
-  const [view, setView] = useState("weekly");
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const initialView =
+    searchParams.get("view") === "monthly"
+      ? "monthly"
+      : "weekly";
+
+  const [view, setView] = useState(initialView);
+
+  // Weekly / Monthly switch
+  const handleViewChange = (newView) => {
+    setView(newView);
+
+    const params = new URLSearchParams(searchParams);
+
+    params.set("view", newView);
+
+    setSearchParams(params);
+  };
 
   return (
     <div className="w-full h-full">
@@ -21,10 +43,11 @@ function AdminTimesheetManagement() {
           {/* WEEKLY */}
           <button
             type="button"
-            onClick={() => setView("weekly")}
+            onClick={() => handleViewChange("weekly")}
             className={`
               rounded-md
               px-5
+              cursor-pointer
               py-2.5
               text-sm
               font-semibold
@@ -43,7 +66,7 @@ function AdminTimesheetManagement() {
           {/* MONTHLY */}
           <button
             type="button"
-            onClick={() => setView("monthly")}
+            onClick={() => handleViewChange("monthly")}
             className={`
               rounded-md
               px-5
@@ -51,6 +74,7 @@ function AdminTimesheetManagement() {
               text-sm
               font-semibold
               transition-all
+              cursor-pointer
               duration-200
               ${
                 view === "monthly"

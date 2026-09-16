@@ -10,6 +10,7 @@ import Employee from "./Employee";
 import AddEmployee from "./AddEmployee";
 import EmployeeProfile from "./EmployeeProfile";
 import MyProfilePage from "./MyProfilePage";
+import EmployeeTimesheetDetails from "./EmployeeTimesheetDetails";
 function Dashboard() {
     const role = localStorage.getItem("role");
     // Block employee users
@@ -30,6 +31,7 @@ function Dashboard() {
                     <Route path="clients" element={<Clients />} />
                     <Route path="jobopenings" element={<JobOpening />} />
                     <Route path="work-approval" element={<WorkApproval />} />
+                    <Route  path="work-approval/timesheet/employee/:employee_code" element={<EmployeeTimesheetDetails />}/>
                     <Route path="timesheet" element={<Timesheet />} />
                     <Route path="employee" element={<Employee />} />
                     <Route path="add-employee" element={<AddEmployee />} />

@@ -6,6 +6,7 @@ import Timesheet from "./Timesheet";
 import Employees from "./Employee";
 import LeaveRequests from "./LeaveRequest";
 import WorkApproval from "./WorkApproval";
+import EmployeeTimesheetDetails from "./EmployeeTimesheetDetails";
 
 function SuperAdminDashboard() {
     const employee_id = localStorage.getItem("employee_id");
@@ -19,6 +20,11 @@ function SuperAdminDashboard() {
                     <Route path="jobopenings" element={<JobOpening />} />
                     <Route path="timesheet" element={<Timesheet />} />
                     <Route path="work-approval" element={<WorkApproval />} />
+              <Route
+    path="work-approval/timesheet/employee/:employee_code"
+    element={<EmployeeTimesheetDetails />}
+/>
+                    <Route path="timesheet" element={<Timesheet />} />
                     <Route path="leave-requests" element={<LeaveRequests />} />
                     <Route path="employees" element={<Employees />} />
                 </Routes>
