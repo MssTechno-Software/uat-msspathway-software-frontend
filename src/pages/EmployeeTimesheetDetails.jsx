@@ -2234,7 +2234,6 @@ export default function AdminTimesheetManagement({ employeeCode: employeeCodePro
                                                 : item
                                             )
                                           );
-
                                           setMissingDayProjectErrors((prev) =>
                                             prev.map((item, i) => {
                                               if (i !== index) return item;
@@ -2265,7 +2264,6 @@ export default function AdminTimesheetManagement({ employeeCode: employeeCodePro
                                                   };
                                                 }
                                               }
-
                                               return { ...item, start_time: "", end_time: "" };
                                             })
                                           );

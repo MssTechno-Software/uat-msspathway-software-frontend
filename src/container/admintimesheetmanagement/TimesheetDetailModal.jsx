@@ -159,6 +159,29 @@ function TimesheetDetailModal({
         fallbackDay?.is_unlogged === true ||
         !fallbackDay?.id;
 
+    // Match the monthly timesheet rule: only past unlogged days can be edited.
+    const workDate =
+        details?.work_date ||
+        fallbackDay?.work_date ||
+        fallbackDay?.date ||
+        selectedDay?.date ||
+        null;
+
+    const isPastDate = (value) => {
+        if (!value) return false;
+
+        const date = new Date(`${value}T00:00:00`);
+        if (Number.isNaN(date.getTime())) return false;
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        return date < today;
+    };
+
+    const isFutureUnloggedDay =
+        isMissingDay && !isPastDate(workDate);
+
     const [actionLoading, setActionLoading] =
         useState(false);
 
@@ -679,18 +702,12 @@ function TimesheetDetailModal({
     // Prepare current details for editing.
     const handleStartEdit = () => {
         // Prevent editing after the timesheet is finalized.
-        if (isFinalized) {
+        if (isFinalized || isFutureUnloggedDay) {
             return;
         }
 
         // Missing / unlogged day starts with one blank project.
         if (isMissingDay) {
-            const workDate =
-                details?.work_date ||
-                fallbackDay?.work_date ||
-                fallbackDay?.date ||
-                selectedDay?.date ||
-                null;
 
             setEditableDetails({
                 ...(details || {}),
@@ -775,7 +792,12 @@ function TimesheetDetailModal({
     // Save edited timesheet details through the API.
     const handleSaveEdit = async () => {
         // Prevent saving after the timesheet is finalized.
-        if (isFinalized) {
+        if (isFinalized || isFutureUnloggedDay) {
+            if (isFutureUnloggedDay) {
+                setEditError(
+                    "Future unlogged days cannot be edited. You can update this day after the work date has passed."
+                );
+            }
             return;
         }
 
@@ -1566,7 +1588,8 @@ function TimesheetDetailModal({
                                     actionLoading ||
                                     saveLoading ||
                                     loading ||
-                                    (!details && !isMissingDay)
+                                    (!details && !isMissingDay) ||
+                                    isFutureUnloggedDay
                                 }
                                 className="rounded-[4px] border border-[#6B2D1A] bg-white px-4 py-2 text-[10px] font-semibold text-[#6B2D1A] transition hover:bg-[#f8f6f2] disabled:cursor-not-allowed disabled:opacity-60"
                             >
@@ -1588,6 +1611,20 @@ function TimesheetDetailModal({
                         </button>
                     </div>
                 </div>
+
+                {isFutureUnloggedDay && !isFinalized && (
+                    <div className="mx-4 mt-4 flex items-start gap-3 rounded-[8px] border border-[#eadbc8] bg-[#f8f6f2] px-4 py-3.5 sm:mx-6">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-[#6B2D1A] shadow-sm">
+                            <LockKeyhole size={15} strokeWidth={2} />
+                        </div>
+                        <div className="min-w-0">
+                            <p className="text-[11px] font-semibold text-[#6B2D1A]">Future unlogged day</p>
+                            <p className="mt-1 text-[10px] leading-4 text-[#7b8492]">
+                                This day is not available for editing yet. Unlogged entries can be added only after the work date has passed.
+                            </p>
+                        </div>
+                    </div>
+                )}
 
                 { }
 
