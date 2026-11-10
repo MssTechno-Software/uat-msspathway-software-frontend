@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { FiX, FiLink, FiCalendar, FiChevronDown } from "react-icons/fi";
+import { useState } from "react";
+import { FiLink, FiChevronDown } from "react-icons/fi";
 import BulkUploadApplications from "./BulkUploadApplications";
 
 function AddApplication({
@@ -9,7 +9,6 @@ function AddApplication({
     editingApp,
     setPopup,
 }) {
-
     const [showPlatformDropdown, setShowPlatformDropdown] = useState(false);
     const [bulkUploadCount, setBulkUploadCount] = useState(0);
     const [bulkUploadAction, setBulkUploadAction] = useState(null);
@@ -17,14 +16,14 @@ function AddApplication({
 
     const today = new Date().toISOString().split("T")[0];
 
-    const [form, setForm] = useState({
-        company: "",
-        role: "",
-        platform: "",
-        date: today,
-        link: "",
-        notes: ""
-    });
+    const [form, setForm] = useState(() => ({
+        company: editingApp?.company || "",
+        role: editingApp?.role || "",
+        platform: editingApp?.platform || "",
+        date: editingApp?.date || today,
+        link: editingApp?.link || "",
+        notes: editingApp?.notes || ""
+    }));
 
     const handleChange = (e) => {
         setForm({
@@ -32,20 +31,6 @@ function AddApplication({
             [e.target.name]: e.target.value
         });
     };
-
-    useEffect(() => {
-        if (editingApp) {
-            setForm({
-                company: editingApp.company || "",
-                role: editingApp.role || "",
-                platform: editingApp.platform || "",
-                date: editingApp.date || today,
-                link: editingApp.link || "",
-                notes: editingApp.notes || ""
-            });
-        }
-    }, [editingApp]);
-
     const handleSubmit = () => {
         const trimmedForm = {
             company: form.company.trim(),
@@ -107,7 +92,6 @@ function AddApplication({
             //     value = "https://" + value;
             // }
 
-            console.log("Validating URL:", value);
 
             const urlPattern = /^https:\/\//;
 
@@ -158,10 +142,9 @@ function AddApplication({
                             type="button"
                             onClick={() => setActiveMode("single")}
                             className={`px-5 py-3 text-sm font-semibold tracking-wide rounded-t-xl border-b-2 transition-all duration-200
-                                ${
-                                    activeMode === "single"
-                                        ? "bg-white text-green-700 border-transparent shadow-[0_-1px_8px_rgba(22,163,74,0.06)]"
-                                        : "text-slate-500 border-transparent hover:text-slate-700 hover:bg-slate-50"
+                                ${activeMode === "single"
+                                    ? "bg-white text-green-700 border-transparent shadow-[0_-1px_8px_rgba(22,163,74,0.06)]"
+                                    : "text-slate-500 border-transparent hover:text-slate-700 hover:bg-slate-50"
                                 }`}
                         >
                             Add Application
@@ -172,10 +155,9 @@ function AddApplication({
                             type="button"
                             onClick={() => setActiveMode("bulk")}
                             className={`px-5 py-3 text-sm font-semibold tracking-wide rounded-t-xl border-b-2 transition-all duration-200
-                                ${
-                                    activeMode === "bulk"
-                                        ? "bg-white text-green-700 border-transparent shadow-[0_-1px_8px_rgba(22,163,74,0.06)]"
-                                        : "text-slate-500 border-transparent hover:text-slate-700 hover:bg-slate-50"
+                                ${activeMode === "bulk"
+                                    ? "bg-white text-green-700 border-transparent shadow-[0_-1px_8px_rgba(22,163,74,0.06)]"
+                                    : "text-slate-500 border-transparent hover:text-slate-700 hover:bg-slate-50"
                                 }`}
                         >
                             Bulk Upload
@@ -266,10 +248,9 @@ function AddApplication({
 
                                         <FiChevronDown
                                             className={`text-gray-500 transition-transform duration-200
-                                                ${
-                                                    showPlatformDropdown
-                                                        ? "rotate-180"
-                                                        : ""
+                                                ${showPlatformDropdown
+                                                    ? "rotate-180"
+                                                    : ""
                                                 }`}
                                         />
 
@@ -382,10 +363,9 @@ function AddApplication({
 
                                     <p
                                         className={`text-xs mt-1 text-right
-                                            ${
-                                                form.notes.length === 500
-                                                    ? "text-red-500"
-                                                    : "text-gray-500"
+                                            ${form.notes.length === 500
+                                                ? "text-red-500"
+                                                : "text-gray-500"
                                             }`}
                                     >
                                         {form.notes.length}/500
@@ -466,11 +446,10 @@ function AddApplication({
                             className="w-full sm:w-auto flex items-center justify-center gap-2 bg-green-800 hover:bg-green-700 text-white px-6 py-2 rounded-xl shadow-md cursor-pointer disabled:bg-gray-300 disabled:cursor-not-allowed"
                         >
                             {bulkUploadCount > 0
-                                ? `Upload ${bulkUploadCount} Application${
-                                      bulkUploadCount !== 1
-                                          ? "s"
-                                          : ""
-                                  }`
+                                ? `Upload ${bulkUploadCount} Application${bulkUploadCount !== 1
+                                    ? "s"
+                                    : ""
+                                }`
                                 : "Upload Applications"}
                         </button>
 

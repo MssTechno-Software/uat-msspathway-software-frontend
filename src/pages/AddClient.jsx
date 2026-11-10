@@ -1,32 +1,63 @@
-import { useState, useEffect } from "react";
-import { FiUser, FiPhone, FiFlag, FiClipboard, FiLock, FiClock, FiChevronDown, FiCode, FiMail, FiMapPin, FiUpload, FiFileText, FiCreditCard, FiBriefcase, FiX, FiEye, FiEyeOff } from "react-icons/fi";
+import { useState, useEffect, useCallback } from "react";
+import { FiUser, FiPhone, FiFlag, FiLock, FiClock, FiChevronDown, FiCode, FiMail, FiMapPin, FiCreditCard, FiBriefcase, FiX, FiEye, FiEyeOff } from "react-icons/fi";
+import { API_BASE_URL } from "../api/axios";
+import { getAccessToken } from "../services/authSession";
+const reverseStatusMap = {
+    A: "Active",
+    C: "Completed",
+    P: "Pause",
+    T: "Terminate"
+};
 
 function AddClient({ onClose, onAdd, editingClient, setPopup }) {
 
-    const [formData, setFormData] = useState({
-        name: "",
-        countryCode: "+91",
-        mobile: "",
-        email: "",
-        password: "",
-        tech: [],
-        status: "Active",
-        employeeId: "",
-        role: "",
-        aadhaar: "",
-        location: "",
-        startDate: "",
-        endDate: "",
-        notes: ""
-    });
+    const [formData, setFormData] = useState(() => ({
+        name: editingClient?.client_name || "",
+        countryCode: editingClient?.mobile?.startsWith("+1") ? "+1" : "+91",
+        mobile: editingClient?.mobile
+            ?.replace(/^\+91/, "")
+            ?.replace(/^\+1/, "") || "",
+        email: editingClient?.email || "",
+        password: editingClient?.password || "",
+        tech: editingClient?.technology
+            ? editingClient.technology.split(",").filter(Boolean)
+            : [],
+        status: reverseStatusMap[editingClient?.status] || "Active",
+        employeeId: editingClient?.employee_id
+            ? String(editingClient.employee_id)
+            : "",
+        role: editingClient?.professional_role || "",
+        aadhaar: editingClient?.aadhaar_number || "",
+        location: editingClient?.location || "",
+        startDate: editingClient?.start_date || "",
+        endDate: editingClient?.end_date &&
+            editingClient.end_date !== "Currently In Process"
+            ? editingClient.end_date
+            : "",
+        notes: editingClient?.notes || ""
+    }));
 
     const [showTechDropdown, setShowTechDropdown] = useState(false);
     const [showStatusDropdown, setShowStatusDropdown] = useState(false);
     const [showEmployeeDropdown, setShowEmployeeDropdown] = useState(false);
     const [employeeIds, setEmployeeIds] = useState([]);
-    const [isCurrentlyClient, setIsCurrentlyClient] = useState(false);
+    const [employeeIdsLoading, setEmployeeIdsLoading] = useState(true);
+    const [employeeIdsError, setEmployeeIdsError] = useState("");
+    const [isCurrentlyClient, setIsCurrentlyClient] = useState(
+        () => !!editingClient && (
+            !editingClient.end_date ||
+            editingClient.end_date === "Currently In Process"
+        )
+    );
     const [techOptions, setTechOptions] = useState([]);
+    const [techOptionsLoading, setTechOptionsLoading] = useState(true);
+    const [techOptionsError, setTechOptionsError] = useState("");
     const [techSearch, setTechSearch] = useState("");
+    const filteredTechOptions = techOptions.filter((tech) =>
+        String(tech.technology_name || "")
+            .toLowerCase()
+            .includes(techSearch.trim().toLowerCase())
+    );
     const [showPassword, setShowPassword] = useState(false);
     const [showCountryDropdown, setShowCountryDropdown] = useState(false);
 
@@ -35,103 +66,99 @@ function AddClient({ onClose, onAdd, editingClient, setPopup }) {
         { code: "+1", label: "Canada", flag: "🇨🇦" }
     ];
 
-    const reverseStatusMap = {
-        A: "Active",
-        C: "Completed",
-        P: "Pause",
-        T: "Terminate"
-    };
+    // Load employee IDs independently and show a local fallback if the request fails.
+    const fetchEmployeeIds = useCallback(async () => {
+        setEmployeeIdsLoading(true);
 
-    useEffect(() => {
-        if (editingClient) {
-            setFormData({
-                name: editingClient.client_name || "",
-                countryCode:
-                    editingClient.mobile?.startsWith("+1")
-                        ? "+1"
-                        : "+91",
-                mobile: editingClient.mobile
-                    ?.replace(/^\+91/, "")
-                    ?.replace(/^\+1/, "") || "",
-                email: editingClient.email || "",
-                password: editingClient.password || "",
-                tech: editingClient.technology
-                    ? editingClient.technology.split(",").filter(Boolean)
-                    : [],
-
-                status: reverseStatusMap[editingClient.status] || "Active",
-
-                employeeId: editingClient.employee_id
-                    ? String(editingClient.employee_id)
-                    : "",
-
-                role: editingClient.professional_role || "",
-                aadhaar: editingClient.aadhaar_number || "",
-                location: editingClient.location || "",
-                startDate: editingClient.start_date || "",
-                endDate:
-                    editingClient.end_date &&
-                        editingClient.end_date !== "Currently In Process"
-                        ? editingClient.end_date
-                        : "",
-
-                notes: editingClient.notes || ""
+        try {
+            const response = await fetch(`${API_BASE_URL.replace(/\/$/, "")}/employee-ids`, {
+                headers: {
+                    Authorization: `Bearer ${getAccessToken() || ""}`
+                }
             });
+            const data = await response.json().catch(() => null);
 
-            // true only when no actual end date exists
-            setIsCurrentlyClient(
-                !editingClient.end_date ||
-                editingClient.end_date === "Currently In Process"
+            if (response.status === 401) {
+                window.dispatchEvent(new Event("session-expired"));
+            }
+
+            if (!response.ok) {
+                const detail = data?.detail;
+                const message =
+                    (typeof detail === "string" && detail) ||
+                    data?.message ||
+                    "Unable to load employee IDs. Please try again.";
+                throw new Error(message);
+            }
+
+            const ids = data?.data ?? data;
+            if (!Array.isArray(ids)) {
+                throw new Error("Employee ID list is unavailable. Please try again.");
+            }
+
+            setEmployeeIds(ids);
+            setEmployeeIdsError("");
+        } catch (error) {
+            setEmployeeIds([]);
+            setEmployeeIdsError(
+                error?.message || "Unable to load employee IDs. Please try again."
             );
+        } finally {
+            setEmployeeIdsLoading(false);
         }
-    }, [editingClient]);
+    }, []);
 
-    /*fetch employee IDs for dropdown*/
     useEffect(() => {
-        const fetchEmployeeIds = async () => {
-            try {
-                const res = await fetch("https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/employee-ids", {
-                    headers: {
-                        Authorization: `Bearer ${localStorage.getItem("token")}`
-                    }
-                });
-                const data = await res.json();
-                console.log("Employee IDs:", data);
-                setEmployeeIds(data.data || data);
-            } catch (error) {
-                console.error("Error fetching employee IDs:", error);
-            }
-        };
         fetchEmployeeIds();
-    }, []);
+    }, [fetchEmployeeIds]);
 
-    /*get technology options for dropdown*/
-    useEffect(() => {
-        const fetchTechnologies = async () => {
-            try {
-                const res = await fetch(
-                    "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/Topic_based/technologies",
-                    {
-                        headers: {
-                            Authorization: `Bearer ${localStorage.getItem("token")}`
-                        }
+    // Load technology options independently so the rest of the form remains usable.
+    const fetchTechnologies = useCallback(async () => {
+        setTechOptionsLoading(true);
+
+        try {
+            const response = await fetch(
+                `${API_BASE_URL.replace(/\/$/, "")}/Topic_based/technologies`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${getAccessToken() || ""}`
                     }
-                );
+                }
+            );
+            const data = await response.json().catch(() => null);
 
-                const data = await res.json();
-
-                console.log("Technologies:", data);
-
-                setTechOptions(data.technologies || []);
-
-            } catch (error) {
-                console.error("Error fetching technologies:", error);
+            if (response.status === 401) {
+                window.dispatchEvent(new Event("session-expired"));
             }
-        };
 
-        fetchTechnologies();
+            if (!response.ok) {
+                const detail = data?.detail;
+                const message =
+                    (typeof detail === "string" && detail) ||
+                    data?.message ||
+                    "Unable to load technologies. Please try again.";
+                throw new Error(message);
+            }
 
+            if (!Array.isArray(data?.technologies)) {
+                throw new Error("Technology options are unavailable. Please try again.");
+            }
+
+            setTechOptions(data.technologies);
+            setTechOptionsError("");
+        } catch (error) {
+            setTechOptions([]);
+            setTechOptionsError(
+                error?.message || "Unable to load technologies. Please try again."
+            );
+        } finally {
+            setTechOptionsLoading(false);
+        }
     }, []);
+
+    useEffect(() => {
+        fetchTechnologies();
+    }, [fetchTechnologies]);
 
     //Handle form input changes
     const handleChange = (e) => {
@@ -171,7 +198,6 @@ function AddClient({ onClose, onAdd, editingClient, setPopup }) {
     };
 
     //submit new or edited client
-    const isEdit = !!editingClient;
     const submit = () => {
 
         // Trim all values before validation
@@ -506,6 +532,7 @@ function AddClient({ onClose, onAdd, editingClient, setPopup }) {
                                             type="text"
                                             placeholder="Search technologies..."
                                             value={techSearch}
+                                            onClick={(e) => e.stopPropagation()}
                                             onChange={(e) => setTechSearch(e.target.value)}
                                             className="w-full p-2 outline-none text-sm"
                                         />
@@ -525,21 +552,43 @@ function AddClient({ onClose, onAdd, editingClient, setPopup }) {
                                     </div>
 
                                     <div className="max-h-40 overflow-y-auto">
-                                        {techOptions.map((tech) => (
-                                            <label
-                                                key={tech.technology_id}
-                                                className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer"
-                                            >
-                                                <input
-                                                    type="checkbox"
-                                                    checked={formData.tech.includes(tech.technology_name)}
-                                                    onChange={() => toggleTech(tech.technology_name)}
-                                                    className="mr-2 accent-green-700"
-                                                />
+                                        {techOptionsLoading ? (
+                                            <p className="px-3 py-3 text-sm text-gray-500 text-center">
+                                                Loading technologies...
+                                            </p>
+                                        ) : techOptionsError ? (
+                                            <div className="px-3 py-3 text-sm text-red-600" role="alert">
+                                                <p>{techOptionsError}</p>
+                                                <button
+                                                    type="button"
+                                                    onClick={fetchTechnologies}
+                                                    disabled={techOptionsLoading}
+                                                    className="mt-2 font-semibold underline underline-offset-2 disabled:opacity-50"
+                                                >
+                                                    Try Again
+                                                </button>
+                                            </div>
+                                        ) : filteredTechOptions.length > 0 ? (
+                                            filteredTechOptions.map((tech) => (
+                                                <label
+                                                    key={tech.technology_id}
+                                                    className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={formData.tech.includes(tech.technology_name)}
+                                                        onChange={() => toggleTech(tech.technology_name)}
+                                                        className="mr-2 accent-green-700"
+                                                    />
 
-                                                <span>{tech.technology_name}</span>
-                                            </label>
-                                        ))}
+                                                    <span>{tech.technology_name}</span>
+                                                </label>
+                                            ))
+                                        ) : (
+                                            <div className="px-3 py-3 text-sm text-gray-500 text-center">
+                                                No matching technologies
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             )}
@@ -620,23 +669,45 @@ function AddClient({ onClose, onAdd, editingClient, setPopup }) {
 
                         {showEmployeeDropdown && (
                             <div className="absolute z-10 mt-2 w-full bg-white border border-gray-200 rounded-xl shadow max-h-52 overflow-y-auto">
-                                {employeeIds.map((tz) => (
-                                    <label
-                                        key={tz}
-                                        className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer"
-                                    >
-                                        <input
-                                            type="radio"
-                                            checked={formData.employeeId === tz}
-                                            onChange={() => {
-                                                setFormData({ ...formData, employeeId: tz });
-                                                setShowEmployeeDropdown(false);
-                                            }}
-                                            className="mr-2 accent-green-700 shrink-0"
-                                        />
-                                        {tz}
-                                    </label>
-                                ))}
+                                {employeeIdsLoading ? (
+                                    <p className="px-3 py-3 text-sm text-gray-500 text-center">
+                                        Loading employee IDs...
+                                    </p>
+                                ) : employeeIdsError ? (
+                                    <div className="px-3 py-3 text-sm text-red-600" role="alert">
+                                        <p>{employeeIdsError}</p>
+                                        <button
+                                            type="button"
+                                            onClick={fetchEmployeeIds}
+                                            disabled={employeeIdsLoading}
+                                            className="mt-2 font-semibold underline underline-offset-2 disabled:opacity-50"
+                                        >
+                                            Try Again
+                                        </button>
+                                    </div>
+                                ) : employeeIds.length > 0 ? (
+                                    employeeIds.map((tz) => (
+                                        <label
+                                            key={tz}
+                                            className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                                        >
+                                            <input
+                                                type="radio"
+                                                checked={formData.employeeId === tz}
+                                                onChange={() => {
+                                                    setFormData({ ...formData, employeeId: tz });
+                                                    setShowEmployeeDropdown(false);
+                                                }}
+                                                className="mr-2 accent-green-700 shrink-0"
+                                            />
+                                            {tz}
+                                        </label>
+                                    ))
+                                ) : (
+                                    <p className="px-3 py-3 text-sm text-gray-500 text-center">
+                                        No employee IDs available
+                                    </p>
+                                )}
                             </div>
                         )}
                     </div>

@@ -3,11 +3,11 @@ import Sidebar from "../container/Sidebar";
 import Clients from "./Clients";
 import JobOpening from "./JobOpening";
 import Timesheet from "./Timesheet";
+import EmployeePayslips from "./EmployeePayslips";
 import LeaveRequests from "./LeaveRequest";
 import MyProfilePage from "./MyProfilePage";
 
 function EmployeeDashboard() {
-    const employee_id = localStorage.getItem("employee_id");
     return (
         <div className="flex min-h-screen">
             <Sidebar />
@@ -17,6 +17,10 @@ function EmployeeDashboard() {
                     <Route path="clients" element={<Clients />} />
                     <Route path="timesheet" element={<Timesheet />} />
                     <Route path="jobopenings" element={<JobOpening />} />
+                    <Route
+                        path="payslips"
+                        element={<EmployeePayslips />}
+                    />
                     <Route path="leave-requests" element={<LeaveRequests />} />
                     <Route path="my-profile/:employee_id" element={<MyProfilePage />} />
                 </Routes>

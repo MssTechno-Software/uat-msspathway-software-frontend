@@ -1,26 +1,12 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { FiEdit, FiTrash2, FiSearch, FiX, FiLoader } from "react-icons/fi";
 import AddEmployee from "./AddEmployee";
-import axios from "axios";
+import api from "../api/axios";
 import { useNavigate } from "react-router-dom";
-
-const API = axios.create({
-  baseURL: "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app",
-});
-
-API.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
+import ApiErrorModal from "../container/ApiErrorModal";
 
 function Employees() {
-  const role = localStorage
-    .getItem("role")
-    ?.toLowerCase()
-    ?.trim();
-
-  console.log("ROLE:", role);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState(false);
@@ -34,27 +20,58 @@ function Employees() {
     type: "",
     onConfirm: null
   });
+  const [apiError, setApiError] = useState(null);
   const navigate = useNavigate();
+
+  // Prefer a readable backend message; use the shared handler for other API errors.
+  const handleApiError = useCallback(
+    (error, title, fallbackMessage, retryKey = null) => {
+      if (error?.response?.status === 401 || error?.status === 401) {
+        setApiError(null);
+        window.dispatchEvent(new Event("session-expired"));
+        return;
+      }
+
+      const detail = error?.response?.data?.detail;
+      const backendMessage =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((item) => item?.msg || item).join(", ")
+            : error?.response?.data?.message || "";
+
+      setApiError({
+        title,
+        message: backendMessage || getApiErrorMessage(error, fallbackMessage),
+        retryKey,
+      });
+    },
+    []
+  );
 
   const rowsPerPage = 10;
 
-  /*fetch api*/
-  const fetchEmployees = async () => {
+  // Fetch the employee list from the existing admin endpoint.
+  const fetchEmployees = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await API.get("/admin/users-table");
-      console.log("feached employee data:", res.data);
+      const res = await api.get("/admin/users-table");
       setEmployees(res.data.data || res.data);
     } catch (err) {
-      console.error("Fetch error:", err.response?.data || err.message);
+      handleApiError(
+        err,
+        "Unable to Load Employees",
+        "Failed to load employees.",
+        "fetchEmployees"
+      );
     } finally {
       setLoading(false);
     }
-  };
+  }, [handleApiError]);
 
   useEffect(() => {
     fetchEmployees();
-  }, []);
+  }, [fetchEmployees]);
 
   /*add or update*/
   const handleSave = async (form) => {
@@ -89,17 +106,10 @@ function Employees() {
 
       formData.append("location", form.location);
 
-      for (let [k, v] of formData.entries()) {
-        console.log(k, v);
-      }
-
       if (editingEmployee) {
         /*update*/
         const employee_id = editingEmployee.employee_id;
-        console.log("Updating ID:", editingEmployee?.employee_id);
-        console.log("Updating Employee with data:", Object.fromEntries(formData.entries()));
-        const res = await API.put(`/admin/users/${employee_id}`, formData);
-        console.log("Updating Employee:", res.data);
+        await api.put(`/admin/users/${employee_id}`, formData);
         setPopup({
           show: true,
           message: "Employee updated successfully.",
@@ -107,9 +117,7 @@ function Employees() {
         });
       } else {
         /*add*/
-        console.log("Adding Employee with data:", Object.fromEntries(formData.entries()));
-        const res = await API.post("/admin/users", formData);
-        console.log("Adding Employee:", res.data);
+        await api.post("/admin/users", formData);
         setPopup({
           show: true,
           message: "Employee added successfully.",
@@ -120,22 +128,19 @@ function Employees() {
       fetchEmployees();
       setShowModal(false);
       setEditingEmployee(null);
-
     } catch (err) {
-      console.error("backend full error:", err.response?.data || err.message);
-      setPopup({
-        show: true,
-        message: err.response?.data?.detail || "Failed to save employee",
-        type: "error"
-      });
+      handleApiError(
+        err,
+        editingEmployee ? "Unable to Update Employee" : "Unable to Add Employee",
+        "Failed to save employee."
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  /*Delete*/
+  // Ask for confirmation before deleting the selected employee.
   const handleDelete = async (employee_id) => {
-    console.log("Attempting to delete employee with ID:", employee_id);
     setPopup({
       show: true,
       message: "Are you sure you want to delete this employee?",
@@ -143,15 +148,14 @@ function Employees() {
       onConfirm: async () => {
         try {
           setLoading(true);
-          const res = await API.delete(`/admin/users/${employee_id}`);
-          console.log("Deleting Employee:", res.data);
+          const res = await api.delete(`/admin/users/${employee_id}`);
           if (res.data.success === false) {
-            setPopup({
-              show: true,
-              message: res.data.message || "Failed to delete employee.",
-              type: "error"
-            });
-
+            setPopup({ show: false, message: "", type: "", onConfirm: null });
+            handleApiError(
+              { message: res.data.message },
+              "Unable to Delete Employee",
+              res.data.message || "Failed to delete employee."
+            );
             return;
           }
           fetchEmployees();
@@ -160,19 +164,14 @@ function Employees() {
             message: "Employee deleted successfully.",
             type: "success"
           });
-        }
-        catch (err) {
-          console.error("Delete error:", err.response?.data || err.message);
-          setPopup({
-            show: true,
-            message:
-              err.response?.data?.message ||
-              err.response?.data?.detail ||
-              "Failed to delete employee.",
-            type: "error"
-          });
-        }
-        finally {
+        } catch (err) {
+          setPopup({ show: false, message: "", type: "", onConfirm: null });
+          handleApiError(
+            err,
+            "Unable to Delete Employee",
+            "Failed to delete employee."
+          );
+        } finally {
           setLoading(false);
         }
       }
@@ -182,16 +181,15 @@ function Employees() {
   const handleEdit = async (employee_id) => {
     try {
       setLoading(true);
-      const res = await API.get(`/admin/users/${employee_id}`);
+      const res = await api.get(`/admin/users/${employee_id}`);
       setEditingEmployee(res.data.data || res.data);
       setShowModal(true);
     } catch (err) {
-      console.error("Edit fetch error:", err.response?.data || err.message);
-      setPopup({
-        show: true,
-        message: "Failed to fetch employee details",
-        type: "error"
-      });
+      handleApiError(
+        err,
+        "Unable to Load Employee Details",
+        "Failed to fetch employee details."
+      );
     } finally {
       setLoading(false);
     }
@@ -408,9 +406,15 @@ function Employees() {
           </div>
         </div>
 
-        {/* MODAL */}
+        {/* ADD / EDIT EMPLOYEE MODAL */}
         {showModal && (
           <AddEmployee
+            key={
+              editingEmployee?.id ??
+              editingEmployee?.employee_id ??
+              editingEmployee?.email ??
+              "new-employee"
+            }
             onClose={() => {
               setShowModal(false);
               setEditingEmployee(null);
@@ -420,7 +424,7 @@ function Employees() {
           />
         )}
 
-        {/*popup*/}
+        {/* SUCCESS, VALIDATION, AND DELETE CONFIRMATION POPUPS */}
         {popup.show && (
           <div className="fixed inset-0 flex items-center justify-center bg-black/40 z-50 px-2">
             <div className="bg-white rounded-xl shadow-lg p-6 w-80 text-center">
@@ -466,6 +470,21 @@ function Employees() {
           </div>
         )}
       </div>
+      {apiError && (
+        <ApiErrorModal
+          title={apiError.title}
+          message={apiError.message}
+          onRetry={
+            apiError.retryKey === "fetchEmployees"
+              ? () => {
+                setApiError(null);
+                fetchEmployees();
+              }
+              : undefined
+          }
+          onClose={() => setApiError(null)}
+        />
+      )}
     </>
   );
 }

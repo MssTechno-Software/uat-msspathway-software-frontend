@@ -1,18 +1,43 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { FiEye, FiEyeOff, FiEdit, FiTrash2, FiSearch, FiX, FiLoader } from "react-icons/fi";
 import AddCredential from "./AddCredential";
 import { useParams } from "react-router-dom";
-import axios from "axios";
+import api from "../api/axios";
+import ApiErrorModal from "../container/ApiErrorModal";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
 
-const API = axios.create({
-    baseURL: "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app",
-});
+const getCredentialErrorMessage = (error, fallbackMessage) => {
+    if (error?.response?.status === 401) {
+        window.dispatchEvent(new Event("session-expired"));
+    }
 
-API.interceptors.request.use((config) => {
-    const token = localStorage.getItem("token");
-    if (token) config.headers.Authorization = `Bearer ${token}`;
-    return config;
-});
+    const responseData = error?.response?.data;
+    const detail = responseData?.detail;
+
+    if (typeof detail === "string" && detail.trim()) {
+        return detail;
+    }
+
+    if (Array.isArray(detail)) {
+        const messages = detail
+            .map((item) => (typeof item === "string" ? item : item?.msg))
+            .filter(Boolean);
+
+        if (messages.length > 0) {
+            return messages.join(", ");
+        }
+    }
+
+    if (typeof responseData?.message === "string" && responseData.message.trim()) {
+        return responseData.message;
+    }
+
+    if (typeof responseData?.error === "string" && responseData.error.trim()) {
+        return responseData.error;
+    }
+
+    return getApiErrorMessage(error, fallbackMessage);
+};
 
 function Credentials() {
 
@@ -22,10 +47,12 @@ function Credentials() {
     const [editing, setEditing] = useState(null);
     const [search, setSearch] = useState("");
     const [visiblePasswords, setVisiblePasswords] = useState({});
-    const [loadingEdit, setLoadingEdit] = useState(false);
+   const [loadingEdit] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
     const [loading, setLoading] = useState(false);
-    const [pageLoading, setPageLoading] = useState(false);
+    const [credentialsLoadError, setCredentialsLoadError] = useState("");
+    const [apiError, setApiError] = useState(null);
+   const [pageLoading] = useState(false);
     const ITEMS_PER_PAGE = 10;
     const credential_id = editing?.id;
 
@@ -36,40 +63,63 @@ function Credentials() {
         onConfirm: null
     });
 
-    useEffect(() => {
-        const fetchCredentials = async () => {
-            try {
-                setLoading(true);
-                const res = await API.get(`/credentials/${client_id}`);
-                console.log("editing credentials response:", res.data);
+    const fetchCredentials = useCallback(async () => {
+        if (!client_id) {
+            setCredentials([]);
+            setCredentialsLoadError("Client ID is missing.");
+            setLoading(false);
+            return false;
+        }
 
-                const data = Array.isArray(res.data?.credentials)
-                    ? res.data.credentials
-                    : [];
+        try {
+            setLoading(true);
+            setCredentialsLoadError("");
 
-                const formatted = data.map((item, index) => ({
-                    id: item.id || index,
-                    portal: item.portal_name,
-                    portalLink: item.portal_link,
-                    email: item.username,
-                    password: item.password,
-                    notes: item.notes,
-                    date: item.created_at || item.date
-                }));
+            const res = await api.get(`/credentials/${client_id}`);
+            const data = Array.isArray(res.data?.credentials)
+                ? res.data.credentials
+                : [];
 
-                setCredentials(formatted);
-            } catch (err) {
-                console.error("Failed to fetch credentials:", err.response?.data || err.message);
-                console.error("ERROR:", err.response?.data || err.message);
-            } finally {
-                setLoading(false);
-            }
-        };
+            const formatted = data.map((item, index) => ({
+                id: item.id || index,
+                portal: item.portal_name,
+                portalLink: item.portal_link,
+                email: item.username,
+                password: item.password,
+                notes: item.notes,
+                date: item.created_at || item.date
+            }));
 
-        if (client_id) fetchCredentials();
+            setCredentials(formatted);
+            setCredentialsLoadError("");
+            setApiError(null);
+            return true;
+        } catch (error) {
+            const message = getCredentialErrorMessage(
+                error,
+                "Unable to load credentials. Please try again."
+            );
+
+            setCredentials([]);
+            setCredentialsLoadError(message);
+            setApiError({
+                title: "Unable to Load Credentials",
+                message,
+                retryAction: "credentials"
+            });
+            return false;
+        } finally {
+            setLoading(false);
+        }
     }, [client_id]);
 
+    useEffect(() => {
+        fetchCredentials();
+    }, [fetchCredentials]);
+
     const saveCredential = async (data) => {
+        const isEditing = Boolean(editing);
+
         try {
             setLoading(true);
             const payload = {
@@ -80,53 +130,42 @@ function Credentials() {
                 notes: data.notes || ""
             };
 
-            console.log("Payload being sent:", payload);
-
-            if (editing) {
+            if (isEditing) {
                 // UPDATE
-                const response = await API.put(`/credentials/update/${credential_id}`, payload);
-                console.log("Update response:", response.data);
+                await api.put(`/credentials/update/${credential_id}`, payload);
             } else {
                 // CREATE
-                const response = await API.post(`/credentials/create_credentials/${client_id}`, payload);
-                console.log("Create response:", response.data);
+                await api.post(`/credentials/create_credentials/${client_id}`, payload);
             }
 
-            // REFRESH
-            const res = await API.get(`/credentials/${client_id}`);
-            console.log("Fetched credentials after save:", res.data);
-
-            const responseData = Array.isArray(res.data?.credentials)
-                ? res.data.credentials
-                : [];
-
-            const updated = responseData.map((item, index) => ({
-                id: item.id || index,
-                portal: item.portal_name,
-                portalLink: item.portal_link,
-                email: item.username,
-                password: item.password,
-                notes: item.notes,
-                date: item.created_at || item.date
-            }));
-
-            setCredentials(updated);
             setEditing(null);
             setShowModal(false);
-            setPopup({
-                show: true,
-                message: editing
-                    ? "Credential updated successfully."
-                    : "Credential added successfully.",
-                type: "success"
-            });
-        } catch (err) {
-            console.error("ERROR:", err.response?.data || err.message);
-            setLoading(false);
-            setPopup({
-                show: true,
-                message: "Failed to save credential. Please try again.",
-                type: "error"
+
+            // Refresh the table after the credential has been saved.
+            const refreshed = await fetchCredentials();
+            if (refreshed) {
+                setPopup({
+                    show: true,
+                    message: isEditing
+                        ? "Credential updated successfully."
+                        : "Credential added successfully.",
+                    type: "success"
+                });
+            } else {
+                setPopup({
+                    show: false,
+                    message: "",
+                    type: "",
+                    onConfirm: null
+                });
+            }
+        } catch (error) {
+            setApiError({
+                title: isEditing ? "Unable to Update Credential" : "Unable to Create Credential",
+                message: getCredentialErrorMessage(
+                    error,
+                    "Failed to save credential. Please try again."
+                )
             });
         } finally {
             setLoading(false);
@@ -142,37 +181,37 @@ function Credentials() {
             onConfirm: async () => {
                 try {
                     setLoading(true);
-                    const response = await API.delete(`/credentials/delete/${credential_id}`);
-                    console.log("Delete response:", response.data);
+                    await api.delete(`/credentials/delete/${credential_id}`);
 
-                    // Refresh
-                    const res = await API.get(`/credentials/${client_id}`);
-                    console.log("Fetched credentials after delete:", res.data);
-                    const responseData = Array.isArray(res.data?.credentials)
-                        ? res.data.credentials
-                        : [];
-                    const updated = responseData.map((item, index) => ({
-                        id: item.id || index,
-                        portal: item.portal_name,
-                        portalLink: item.portal_link,
-                        email: item.username,
-                        password: item.password,
-                        notes: item.notes
-                    }));
-                    setCredentials(updated);
+                    // Refresh the list after a successful delete.
+                    const refreshed = await fetchCredentials();
+                    if (refreshed) {
+                        setPopup({
+                            show: true,
+                            message: "Credential deleted successfully.",
+                            type: "success"
+                        });
+                    } else {
+                        setPopup({
+                            show: false,
+                            message: "",
+                            type: "",
+                            onConfirm: null
+                        });
+                    }
+                } catch (error) {
                     setPopup({
-                        show: true,
-                        message: "Credential deleted successfully.",
-                        type: "success"
+                        show: false,
+                        message: "",
+                        type: "",
+                        onConfirm: null
                     });
-
-
-                } catch (err) {
-                    console.error("ERROR:", err.response?.data || err.message);
-                    setPopup({
-                        show: true,
-                        message: "Failed to delete credential. Please try again.",
-                        type: "error"
+                    setApiError({
+                        title: "Unable to Delete Credential",
+                        message: getCredentialErrorMessage(
+                            error,
+                            "Failed to delete credential. Please try again."
+                        )
                     });
                 } finally {
                     setLoading(false);
@@ -183,10 +222,9 @@ function Credentials() {
 
     // EDIT
     const editCredential = async (credential_id) => {
-        console.log("Editing Credential ID:", credential_id);
         try {
-            const res = await API.get(`/credentials/credentials/${credential_id}`);
-
+            setLoading(true);
+            const res = await api.get(`/credentials/credentials/${credential_id}`);
             const data = res.data?.data || res.data;
 
             setEditing({
@@ -199,14 +237,25 @@ function Credentials() {
             });
 
             setShowModal(true);
-
         } catch (error) {
-            console.error("Error fetching credential:", error);
-            setPopup({
-                show: true,
-                message: "Failed to edit credentials.",
-                type: "error"
+            setApiError({
+                title: "Unable to Load Credential",
+                message: getCredentialErrorMessage(
+                    error,
+                    "Failed to load credential details. Please try again."
+                )
             });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleApiErrorRetry = () => {
+        const retryAction = apiError?.retryAction;
+        setApiError(null);
+
+        if (retryAction === "credentials") {
+            fetchCredentials();
         }
     };
 
@@ -234,6 +283,19 @@ function Credentials() {
 
     return (
         <>
+            {apiError && (
+                <ApiErrorModal
+                    title={apiError.title}
+                    message={apiError.message}
+                    onRetry={
+                        apiError.retryAction === "credentials"
+                            ? handleApiErrorRetry
+                            : undefined
+                    }
+                    onClose={() => setApiError(null)}
+                />
+            )}
+
             {(loading || pageLoading || loadingEdit) && (
                 <div className="fixed inset-0 bg-black/40 z-9999 flex items-center justify-center">
 
@@ -300,6 +362,28 @@ function Credentials() {
 
                     </div>
 
+                    {credentialsLoadError ? (
+                        <div className="flex min-h-[55vh] items-center justify-center px-4">
+                            <div
+                                role="alert"
+                                className="w-full max-w-md rounded-2xl border border-red-200 bg-red-50 p-8 text-center shadow-sm"
+                            >
+                                <h2 className="text-lg font-semibold text-red-600">
+                                    Credentials unavailable
+                                </h2>
+                                <p className="mt-2 text-sm leading-6 text-red-600">
+                                    {credentialsLoadError}
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={fetchCredentials}
+                                    className="mt-5 rounded-lg bg-green-800 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-green-700"
+                                >
+                                    Try Again
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
                     <div className="bg-white rounded-2xl shadow-lg overflow-hidden border-gray-50 w-full">
                         <div className="overflow-x-auto">
 
@@ -383,7 +467,6 @@ function Credentials() {
 
                                                         <button
                                                             onClick={() => {
-                                                                console.log("Edit button clicked", item.id);
                                                                 editCredential(item.id)
                                                             }}
                                                             className="p-2 rounded-lg hover:bg-green-50 transition cursor-pointer"
@@ -482,6 +565,7 @@ function Credentials() {
                             </div>
                         </div>
                     </div>
+                    )}
                 </div>
 
                 {/* MODAL */}

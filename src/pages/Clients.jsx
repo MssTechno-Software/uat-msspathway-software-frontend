@@ -1,10 +1,13 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { FiEdit, FiTrash2, FiSearch, FiLoader, FiX } from "react-icons/fi";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import AddClient from "./AddClient";
+import { API_BASE_URL } from "../api/axios";
+import ApiErrorModal from "../container/ApiErrorModal";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
+import { getAccessToken, getUserRole } from "../services/authSession";
 
-const BASE_URL = "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app";
 const statusMap = {
     Active: "A",
     Completed: "C",
@@ -14,10 +17,7 @@ const statusMap = {
 
 function Clients() {
     const navigate = useNavigate();
-    const role = localStorage
-        .getItem("role")
-        ?.toLowerCase()
-        ?.trim();
+     const role = getUserRole();
     const [clients, setClients] = useState([]);
     const [search, setSearch] = useState("");
     const [showModal, setShowModal] = useState(false);
@@ -33,41 +33,59 @@ function Clients() {
         type: "", // success | error | confirm
         onConfirm: null
     });
+    const [apiError, setApiError] = useState(null);
+    const [clientsLoadError, setClientsLoadError] = useState("");
 
     // helper to get headers with token
-    const getAuthHeaders = () => {
-        const token = localStorage.getItem("token");
+    const getAuthHeaders = useCallback(() => {
+       const token = getAccessToken();
 
         return {
             headers: {
                 Authorization: token ? `Bearer ${token}` : "",
             },
         };
-    };
+    }, []);
 
     useEffect(() => {
         setCurrentPage(1);
     }, [search]);
 
     // FETCH CLIENTS
-    const fetchClients = async () => {
+    const fetchClients = useCallback(async () => {
         try {
             setLoading(true);
-            const res = await axios.get(`${BASE_URL}/clients/clients`, getAuthHeaders());
-            console.log("Fetched clients:", res.data);
-            console.log("Client state check:", res.data);
+            setApiError(null);
+            setClientsLoadError("");
+
+            const res = await axios.get(`${API_BASE_URL}/clients/clients`, getAuthHeaders());
             setClients(res.data);
-            return res; // return response for chaining
+            return res; // Return the response so save/delete handlers can check refresh success.
         } catch (err) {
-            console.error("ERROR:", err.response?.data || err.message);
+            if (err?.response?.status === 401) {
+                window.dispatchEvent(new Event("session-expired"));
+            }
+
+            const message = getApiErrorMessage(
+                err,
+                "Unable to load clients."
+            );
+
+            setClientsLoadError(message);
+            setApiError({
+                title: "Unable to Load Clients",
+                message,
+                retryAction: "clients"
+            });
+            return null;
         } finally {
             setLoading(false);
         }
-    };
+    }, [getAuthHeaders]);
 
     useEffect(() => {
         fetchClients();
-    }, []);
+    }, [fetchClients]);
 
 
     // ADD OR UPDATE CLIENT
@@ -120,29 +138,21 @@ function Clients() {
             );
             formData.append("notes", client.notes);
 
-            // DEBUG (optional but useful)
-            for (let pair of formData.entries()) {
-                console.log(pair[0], pair[1]);
-            }
-
-            if (editingClient) {
+             if (editingClient) {
 
                 // UPDATE
                 const client_id = editingClient.client_id || editingClient.id;
-                console.log("Updating client with ID:", client_id);
-                const response = await axios.put(`${BASE_URL}/clients/update-client/${client_id}`, formData, {
+                 await axios.put(`${API_BASE_URL}/clients/update-client/${client_id}`, formData, {
                     ...getAuthHeaders(),
                     headers: {
                         ...getAuthHeaders().headers,
                         "Content-Type": "multipart/form-data"
                     }
                 });
-                console.log("Update response:", response.data);
-
+             
             } else {
                 // CREATE
-                console.log("Creating new client");
-                const response = await axios.post(`${BASE_URL}/clients/create-client`, formData, {
+                await axios.post(`${API_BASE_URL}/clients/create-client`, formData, {
                     ...getAuthHeaders(),
                     headers: {
                         ...getAuthHeaders().headers,
@@ -150,14 +160,15 @@ function Clients() {
                     }
                 }
                 );
-                console.log("Create response:", response.data);
             }
 
-            const res = await fetchClients();
-            console.log("Fetched clients after save:", res.data);
+            const refreshedClients = await fetchClients();
 
             setShowModal(false);
             setEditingClient(null);
+
+            // Do not show a success popup over the list-load error modal.
+            if (!refreshedClients) return;
 
             setPopup({
                 show: true,
@@ -166,19 +177,27 @@ function Clients() {
             });
 
         } catch (error) {
-            console.error("FULL ERROR:", error.response?.data || error.message);
+            if (error?.response?.status === 401) {
+                window.dispatchEvent(new Event("session-expired"));
+            }
 
+            const detail = error?.response?.data?.detail;
             const backendMessage =
-                error.response?.data?.message ||
-                error.response?.data?.error ||
-                error.response?.data?.detail ||
-                error.message ||
-                "An error occurred while saving the client";
+                error?.response?.data?.message ||
+                error?.response?.data?.error ||
+                (typeof detail === "string"
+                    ? detail
+                    : Array.isArray(detail)
+                        ? detail.map((item) => item?.msg || item).join(", ")
+                        : "");
 
-            setPopup({
-                show: true,
-                message: backendMessage,
-                type: "error"
+            setApiError({
+                title: editingClient
+                    ? "Unable to Update Client"
+                    : "Unable to Create Client",
+                message:
+                    backendMessage ||
+                    getApiErrorMessage(error, "Unable to save client.")
             });
         } finally {
             setLoading(false);
@@ -188,7 +207,6 @@ function Clients() {
     // DELETE CLIENT
     const deleteClient = async (client_id) => {
         if (!client_id) {
-            console.error("Invalid client ID for deletion", client_id);
             setPopup({
                 show: true,
                 message: "Invalid client ID",
@@ -205,12 +223,18 @@ function Clients() {
             onConfirm: async () => {
                 try {
                     setLoading(true);
-                    const response = await axios.delete(`${BASE_URL}/clients/clients/${client_id}`, getAuthHeaders());
-                    console.log("Delete response:", response.data);
+                    await axios.delete(`${API_BASE_URL}/clients/clients/${client_id}`, getAuthHeaders());
 
-                    //refresh
-                    const res = await fetchClients();
-                    console.log("Fetched data after deletion", res.data);
+                    // Close the confirmation before refreshing the list.
+                    setPopup({
+                        show: false,
+                        message: "",
+                        type: "",
+                        onConfirm: null
+                    });
+
+                    const refreshedClients = await fetchClients();
+                    if (!refreshedClients) return;
 
                     setPopup({
                         show: true,
@@ -218,11 +242,31 @@ function Clients() {
                         type: "success"
                     });
                 } catch (error) {
-                    console.error("Error in deleting client:", error.response?.data || error.message);
+                    if (error?.response?.status === 401) {
+                        window.dispatchEvent(new Event("session-expired"));
+                    }
+
+                    const detail = error?.response?.data?.detail;
+                    const backendMessage =
+                        error?.response?.data?.message ||
+                        error?.response?.data?.error ||
+                        (typeof detail === "string"
+                            ? detail
+                            : Array.isArray(detail)
+                                ? detail.map((item) => item?.msg || item).join(", ")
+                                : "");
+
                     setPopup({
-                        show: true,
-                        message: "Error while deleting client",
-                        type: "error"
+                        show: false,
+                        message: "",
+                        type: "",
+                        onConfirm: null
+                    });
+                    setApiError({
+                        title: "Unable to Delete Client",
+                        message:
+                            backendMessage ||
+                            getApiErrorMessage(error, "Unable to delete client.")
                     });
                 } finally {
                     setLoading(false);
@@ -294,6 +338,29 @@ function Clients() {
                     </div>
                 </div>
             )}
+            {clientsLoadError && !apiError ? (
+                <div className="flex min-h-[55vh] items-center justify-center px-4">
+                    <div
+                        role="alert"
+                        className="w-full max-w-md rounded-2xl border border-red-200 bg-red-50 p-8 text-center shadow-sm"
+                    >
+                        <h2 className="text-lg font-semibold text-red-600">
+                            Clients unavailable
+                        </h2>
+                        <p className="mt-2 text-sm leading-6 text-red-600">
+                            {clientsLoadError}
+                        </p>
+                        <button
+                            type="button"
+                            onClick={fetchClients}
+                            className="mt-5 rounded-lg bg-green-800 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-green-700"
+                        >
+                            Try Again
+                        </button>
+                    </div>
+                </div>
+            ) : (
+                <>
             {/* SEARCH */}
             <div className="w-full sm:w-1/2">
                 <div className="relative flex items-center bg-gray-100 px-4 py-2 rounded-full shadow-sm">
@@ -532,7 +599,7 @@ function Clients() {
                                 onClick={() => setCurrentPage(totalPages)}
                                 disabled={currentPage === totalPages || loading}
                                 className={`px-3 py-1 rounded border
-                ${currentPage === totalPages
+                                 ${currentPage === totalPages
                                         ? "text-gray-300 cursor-not-allowed border-gray-200"
                                         : "text-gray-700 hover:bg-gray-100 border-gray-300"
                                     }`}
@@ -544,6 +611,10 @@ function Clients() {
                     </div>
                 </div>
             </div>
+
+                </>
+            )}
+
             {/* MODAL */}
             {showModal && (
                 <AddClient
@@ -556,6 +627,22 @@ function Clients() {
                     setPopup={setPopup}
                 />
 
+            )}
+
+            {apiError && (
+                <ApiErrorModal
+                    title={apiError.title}
+                    message={apiError.message}
+                    onRetry={
+                        apiError.retryAction === "clients"
+                            ? () => {
+                                setApiError(null);
+                                fetchClients();
+                            }
+                            : undefined
+                    }
+                    onClose={() => setApiError(null)}
+                />
             )}
 
             {/* POPUP */}

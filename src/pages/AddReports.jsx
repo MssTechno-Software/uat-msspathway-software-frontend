@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { FiChevronDown } from "react-icons/fi";
 
 export default function AddReport({ onClose, onSave, editData, setPopup }) {
@@ -11,58 +11,16 @@ export default function AddReport({ onClose, onSave, editData, setPopup }) {
     const [stageOpen, setStageOpen] = useState(false);
     const [statusOpen, setStatusOpen] = useState(false);
 
-    const [form, setForm] = useState({
-        company: "",
-        recruiterName: "",
-        recruiterContact: "",
-        recruiterEmail: "",
-        stage: "Call",
-        status: "Pending",
-        date: today,
-        notes: ""
-    });
-
-    // Prefill on edit
-    useEffect(() => {
-        if (editData) {
-            setForm({
-                company: editData.company || "",
-                recruiterName: editData.recruiterName || "",
-                recruiterContact: editData.recruiterContact || "",
-                recruiterEmail: editData.recruiterEmail || "",
-                stage: editData.stage || "Call",
-                status: editData.status || "Pending",
-                date: editData.date || today,
-                notes: editData.notes || ""
-            });
-        }
-    }, [editData]);
-
-    const getAllowedStages = () => {
-        if (!editData) return ["Call"];
-
-        const index = STAGES.indexOf(editData.stage);
-
-        // Rejected → stop progression
-        if (editData.status === "Rejected") {
-            return [editData.stage];
-        }
-
-        // Pending → stay on same stage
-        if (editData.status === "Pending") {
-            return [editData.stage];
-        }
-
-        // Cleared OR Skipped → allow next stage
-        if (
-            editData.status === "Cleared" ||
-            editData.status === "Skipped"
-        ) {
-            return STAGES.slice(0, index + 2);
-        }
-
-        return [editData.stage];
-    };
+    const [form, setForm] = useState(() => ({
+        company: editData?.company || "",
+        recruiterName: editData?.recruiterName || "",
+        recruiterContact: editData?.recruiterContact || "",
+        recruiterEmail: editData?.recruiterEmail || "",
+        stage: editData?.stage || "Call",
+        status: editData?.status || "Pending",
+        date: editData?.date || today,
+        notes: editData?.notes || ""
+    }));
 
     const validateForm = () => {
 
@@ -334,7 +292,6 @@ export default function AddReport({ onClose, onSave, editData, setPopup }) {
                             value={form.notes}
                             onChange={(e) => {
                                 setForm({ ...form, notes: e.target.value });
-                                setErrors({ ...errors, notes: "" });
                             }}
                             maxLength={500}
                             className="w-full mt-2 border border-gray-200 rounded-xl p-3 bg-gray-50 outline-none resize-none h-24"

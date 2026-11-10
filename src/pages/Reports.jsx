@@ -1,9 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import AddReports from "./AddReports";
 import CompanyCard from "../container/CompanyCard";
 import { FiSearch, FiLoader, FiX } from "react-icons/fi";
 import { useParams } from "react-router-dom";
-import axios from "axios";
+import api from "../api/axios";
+import ApiErrorModal from "../container/ApiErrorModal";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
 
 const STAGES = ["Call", "Mail", "Assignment", "L1", "L2", "Offer"];
 
@@ -30,15 +32,32 @@ const normalizeStatus = (status) => {
 
     return "Pending";
 };
-const API = axios.create({
-    baseURL: "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app",
-});
 
-API.interceptors.request.use((config) => {
-    const token = localStorage.getItem("token");
-    if (token) config.headers.Authorization = `Bearer ${token}`;
-    return config;
-});
+const dispatchSessionExpiredIfNeeded = (error) => {
+    if ((error?.response?.status ?? error?.status) !== 401) return false;
+
+    window.dispatchEvent(new Event("session-expired"));
+    return true;
+};
+
+const getReportApiErrorMessage = (error, fallbackMessage) => {
+    const data = error?.response?.data;
+    const normalizeMessage = (value) => {
+        if (typeof value === "string") return value;
+        if (Array.isArray(value)) {
+            return value.map((item) => item?.msg || String(item)).join(", ");
+        }
+        return "";
+    };
+
+    return (
+        normalizeMessage(data?.detail) ||
+        normalizeMessage(data?.message) ||
+        normalizeMessage(data?.error) ||
+        getApiErrorMessage(error, fallbackMessage)
+    );
+};
+
 
 export default function Reports() {
     const [entries, setEntries] = useState([]);
@@ -52,7 +71,8 @@ export default function Reports() {
     const [appliedFromDate, setAppliedFromDate] = useState("");
     const [appliedToDate, setAppliedToDate] = useState("");
     const [loading, setLoading] = useState(false);
-    const [pageLoading, setPageLoading] = useState(false);
+    const [loadError, setLoadError] = useState("");
+    const [apiError, setApiError] = useState(null);
     const [counts, setCounts] = useState({
         "Call Received": 0,
         "Mail Received": 0,
@@ -70,15 +90,13 @@ export default function Reports() {
 
     const itemsPerPage = 6;
 
-    // FETCH REPORTS
-    const fetchReports = async () => {
+    // Fetch reports and keep main-page errors separate from action errors.
+    const fetchReports = useCallback(async () => {
         try {
             setLoading(true);
+            setLoadError("");
 
-            const res = await API.get(`/reports/clients/${client_id}/reports`);
-
-            console.log("Fetched reports:", res.data);
-
+            const res = await api.get(`/reports/clients/${client_id}/reports`);
             const responseData = res.data || {};
 
             // PIPELINE OVERVIEW COUNTS
@@ -92,7 +110,6 @@ export default function Reports() {
 
             // COMPANY PROGRESSION
             const data = responseData.company_progression || [];
-
             const formatted = data.map((item) => ({
                 company: item.company,
                 created_date: item.created_date,
@@ -105,30 +122,48 @@ export default function Reports() {
             }));
 
             setEntries(formatted);
-
+            setApiError(null);
+            return true;
         } catch (err) {
-
-            console.error(
-                "ERROR:",
-                err.response?.data || err.message
+            dispatchSessionExpiredIfNeeded(err);
+            const message = getReportApiErrorMessage(
+                err,
+                "Unable to load reports. Please try again."
             );
 
-            setPopup({
-                show: true,
-                message:
-                    err.response?.data?.message ||
-                    "Failed to fetch reports",
-                type: "error"
+            setEntries([]);
+            setLoadError(message);
+            setApiError({
+                title: "Unable to Load Reports",
+                message,
+                onRetry: () => fetchReports(),
             });
-
+            return false;
         } finally {
             setLoading(false);
         }
+    }, [client_id]);
+
+    const showApiError = (error, title, fallbackMessage, onRetry) => {
+        if (dispatchSessionExpiredIfNeeded(error)) return;
+
+        setApiError({
+            title,
+            message: getReportApiErrorMessage(error, fallbackMessage),
+            onRetry,
+        });
+    };
+
+    const retryApiAction = async () => {
+        const retry = apiError?.onRetry;
+        setApiError(null);
+
+        if (retry) await retry();
     };
 
     useEffect(() => {
         if (client_id) fetchReports();
-    }, [client_id]);
+    }, [client_id, fetchReports]);
 
     const handleSave = async (newEntry) => {
         const isUpdating = editData?.id !== null && editData?.id !== undefined;
@@ -144,51 +179,46 @@ export default function Reports() {
             notes: newEntry.notes
         };
 
-        console.log("Payload to save:", payload);
         try {
             setLoading(true);
             if (isUpdating) {
-                // UPDATE
-                console.log("Updating report with ID:", editData.id);
-                const response = await API.put(`/reports/reports/${editData.id}`, payload);
-                console.log("Update report response:", response.data);
+                await api.put(`/reports/reports/${editData.id}`, payload);
             } else {
-                // CREATE
-                console.log("client_id for creating report:", client_id);
-                const response = await API.post(`/reports/clients/${client_id}/reports`, payload);
-                console.log("Created report response:", response.data);
+                await api.post(`/reports/clients/${client_id}/reports`, payload);
             }
+
+            // Refresh before showing success so refresh failures are reported accurately.
+            const refreshed = await fetchReports();
+            setEditData(null);
+            setShowModal(false);
+
+            if (!refreshed) {
+                setApiError((currentError) => currentError ? {
+                    ...currentError,
+                    title: isUpdating ? "Report Updated, Refresh Failed" : "Report Saved, Refresh Failed",
+                    message: `The report was ${isUpdating ? "updated" : "saved"} successfully, but the reports list could not be refreshed. Retry to reload the list.`,
+                    onRetry: () => fetchReports(),
+                } : currentError);
+                return;
+            }
+
             setPopup({
                 show: true,
                 message: isUpdating ? "Report updated successfully." : "Report added successfully.",
                 type: "success"
             });
-            // REFRESH
-            fetchReports();
-            console.log("Reports refreshed after save.");
-
-            setEditData(null);
-            setShowModal(false);
-
         } catch (err) {
-            console.error("ERROR:", err.response?.data || err.message);
-            setPopup({
-                show: true,
-                message: "Failed to save report. Please try again.",
-                type: "error"
-            });
+            showApiError(
+                err,
+                isUpdating ? "Report Update Failed" : "Report Creation Failed",
+                "Failed to save report. Please try again."
+            );
         } finally {
             setLoading(false);
         }
     };
 
     const handleDelete = async (companyName) => {
-
-        console.log(
-            "Attempting to delete company:",
-            companyName
-        );
-
         if (!companyName) {
             setPopup({
                 show: true,
@@ -208,7 +238,7 @@ export default function Reports() {
                 try {
                     setLoading(true);
                     // GET LATEST REPORTS
-                    const res = await API.get(
+                    const res = await api.get(
                         `/reports/clients/${client_id}/reports`
                     );
                     const companies =
@@ -220,10 +250,6 @@ export default function Reports() {
                         .map((item) => item.report_id)
                         .filter(Boolean);
 
-                    console.log(
-                        "Deleting report IDs:",
-                        reportIds
-                    );
                     // REMOVE COMPANY FROM UI FIRST
                     setEntries((prev) =>
                         prev.filter(
@@ -234,27 +260,33 @@ export default function Reports() {
                     // DELETE ALL REPORTS IN BACKEND
                     await Promise.all(
                         reportIds.map((report_id) =>
-                            API.delete(`/reports/reports/${report_id}`)
+                            api.delete(`/reports/reports/${report_id}`)
                         )
                     );
 
-                    // REFRESH FINAL DATA
-                    await fetchReports();
+                    // Refresh the list before confirming completion.
+                    const refreshed = await fetchReports();
+                    if (!refreshed) {
+                        setApiError((currentError) => currentError ? {
+                            ...currentError,
+                            title: "Company Deleted, Refresh Failed",
+                            message: "The company report was deleted, but the reports list could not be refreshed. Retry to reload the list.",
+                            onRetry: () => fetchReports(),
+                        } : currentError);
+                        return;
+                    }
+
                     setPopup({
                         show: true,
                         message: "Company deleted successfully.",
                         type: "success"
                     });
                 } catch (err) {
-                    console.error(
-                        "DELETE ERROR:",
-                        err.response?.data || err.message
+                    showApiError(
+                        err,
+                        "Company Report Deletion Failed",
+                        "Failed to delete company report. Please try again."
                     );
-                    setPopup({
-                        show: true,
-                        message: "Failed to delete company.",
-                        type: "error"
-                    });
                 } finally {
                     setLoading(false);
 
@@ -278,10 +310,8 @@ export default function Reports() {
             }
 
             // fetch full report details
-            const res = await API.get(`/reports/reports/${latest.id}`);
+            const res = await api.get(`/reports/reports/${latest.id}`);
             const report = res.data;
-
-            console.log("Edit report ID:", report.id);
 
             setEditData({
                 id: report.id,
@@ -298,12 +328,12 @@ export default function Reports() {
             setShowModal(true);
 
         } catch (err) {
-            console.error("EDIT FETCH ERROR:", err.response?.data || err.message);
-            setPopup({
-                show: true,
-                message: "Failed to load report details.",
-                type: "error",
-            });
+            showApiError(
+                err,
+                "Unable to Load Report Details",
+                "Failed to load report details. Please try again.",
+                () => handleEdit(company)
+            );
         }
     };
 
@@ -441,7 +471,7 @@ export default function Reports() {
 
     return (
         <>
-            {(loading || pageLoading) && (
+            {loading && (
                 <div className="fixed inset-0 bg-black/40 z-9999 flex items-center justify-center">
 
                     <div className="p-6 flex flex-col items-center gap-3">
@@ -455,7 +485,7 @@ export default function Reports() {
                     </div>
                 </div>
             )}
-            <div className="bg-gray-50 min-h-screen p-4 sm:p-6">
+            <div className={`bg-gray-50 min-h-screen p-4 sm:p-6 ${loadError && !loading ? "hidden" : ""}`}>
 
                 {/* TOP HEADER */}
                 <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center mb-6 gap-4">
@@ -611,7 +641,7 @@ export default function Reports() {
 
                 {/* COMPANY CARDS */}
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                    {paginated.map((company, idx) => (
+                    {paginated.map((company) => (
                         <CompanyCard
                             key={company.company}
                             data={company}
@@ -763,6 +793,31 @@ export default function Reports() {
                 )}
 
             </div>
+
+            {loadError && !loading && (
+                <div className="flex min-h-[55vh] flex-col items-center justify-center gap-3 p-6 text-center" role="alert">
+                    <div className="w-full max-w-xl rounded-2xl border border-red-200 bg-red-50 p-6 shadow-sm">
+                        <h2 className="text-lg font-semibold text-red-700">Reports unavailable</h2>
+                        <p className="mt-2 text-sm text-gray-600">{loadError}</p>
+                        <button
+                            type="button"
+                            onClick={fetchReports}
+                            className="mt-5 rounded-lg bg-green-800 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-700"
+                        >
+                            Try Again
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {apiError && (
+                <ApiErrorModal
+                    title={apiError.title}
+                    message={apiError.message}
+                    onRetry={apiError.onRetry ? retryApiAction : undefined}
+                    onClose={() => setApiError(null)}
+                />
+            )}
         </>
     );
 }

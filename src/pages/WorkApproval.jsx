@@ -1,8 +1,8 @@
-import AdminTimesheetManagement from "../container/admintimesheetmanagement/AdminTimesheetManagement";
+import TimesheetLayout from "../container/admintimesheetmanagement/TimesheetLayout";
 
 function WorkApproval() {
   return (
-    <AdminTimesheetManagement />
+    <TimesheetLayout />
   );
 }
 export default WorkApproval;

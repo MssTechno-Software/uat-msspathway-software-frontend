@@ -1,39 +1,62 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Save, Calendar as CalendarIcon, Edit, Trash } from "lucide-react";
 import { FiLoader } from "react-icons/fi";
-const MAX_ENTRIES = 5;
-const BASE_URL = "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/timesheet";
+import { API_BASE_URL } from "../api/axios";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
+import ApiErrorModal from "./ApiErrorModal";
+import { getAccessToken, getUserId } from "../services/authSession";
+// Keep all timesheet endpoints under the shared API base URL.
+const BASE_URL = `${API_BASE_URL}/timesheet`;
 
-function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
-  if (!selectedDate) return null;
+// Normalize fetch failures so the shared API error handler can read the HTTP status.
+const createApiError = (status, message = "") => {
+  const error = new Error(message || `Request failed with status ${status}`);
+  error.response = { status };
+  if (message) error.apiMessage = message;
+  return error;
+};
 
-  const userId = localStorage.getItem("user_id");
+const EMPTY_FORM = {
+  project: "",
+  category: "",
+  breakTime: "",
+  startTime: "",
+  endTime: "",
+  task_description: "",
+};
 
-  const dateKey = selectedDate.getFullYear() +
-    "-" +
-    String(selectedDate.getMonth() + 1).padStart(2, "0") +
-    "-" +
-    String(selectedDate.getDate()).padStart(2, "0");
+// Calculate total work hours after subtracting the break duration.
+const calculateHours = (start, end, breakMin) => {
+  if (!start || !end) return 0;
+  const s = new Date(`1970-01-01T${start}`);
+  const e = new Date(`1970-01-01T${end}`);
+  let mins = (e - s) / 60000;
+  mins -= Number(breakMin || 0);
+  return (mins / 60).toFixed(1);
+};
 
+function DailyWorkLog(props) {
+  if (!props.selectedDate) return null;
+
+  return <DailyWorkLogContent {...props} />;
+}
+
+function DailyWorkLogContent({ selectedDate, isLeave, isPublicHoliday }) {
+
+  const userId = getUserId();
+  // Format the selected date to match the API date parameter (YYYY-MM-DD).
+  const dateKey = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`;
+
+  // Work logs are locked for weekends, leave days, holidays, submitted days, and past/future dates.
   const isWeekend = selectedDate.getDay() === 0 || selectedDate.getDay() === 6;
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const selected = new Date(selectedDate);
   selected.setHours(0, 0, 0, 0);
-  const isNotToday =
-    selected.getTime() !== today.getTime();
+  const isNotToday = selected.getTime() !== today.getTime();
 
-  const emptyForm = {
-    project: "",
-    category: "",
-    breakTime: "",
-    startTime: "",
-    endTime: "",
-    task_description: "",
-  };
-
-  const [formData, setFormData] = useState(emptyForm);
+  const [formData, setFormData] = useState(EMPTY_FORM);
   const [entries, setEntries] = useState([]);
   const [editIndex, setEditIndex] = useState(null);
   const [submitted, setSubmitted] = useState(false);
@@ -43,8 +66,10 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [holidayDescription, setHolidayDescription] = useState("");
   const [popupMessage, setPopupMessage] = useState("");
-  const [popupType, setPopupType] = useState("success"); // success | error
+  // Track whether the shared popup should display a success or error message.
+  const [popupType, setPopupType] = useState("success");
   const [showPopup, setShowPopup] = useState(false);
+  const [apiError, setApiError] = useState(null);
 
   const isDisabled = isWeekend || isLeave || isPublicHoliday || submitted || isNotToday;
 
@@ -54,12 +79,29 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
     setShowPopup(true);
   };
 
-  const fetchDrafts = async () => {
-    const token = localStorage.getItem("token");
+  // Route authentication failures to session expiry and show other API errors in the modal.
+  const showApiError = useCallback((error, title, fallbackMessage, onRetry) => {
+    if (error?.response?.status === 401) {
+      setApiError(null);
+      window.dispatchEvent(new Event("session-expired"));
+      return;
+    }
+
+    setApiError({
+      title,
+      message: error?.apiMessage || getApiErrorMessage(error, fallbackMessage),
+      onRetry,
+    });
+  }, []);
+
+  // Fetch drafts for the selected date and convert API fields to the form/list format.
+  const fetchDrafts = useCallback(async () => {
+    const token = getAccessToken();
     if (!token) return;
 
     try {
       setLoading(true);
+      // Retrieve the selected day's drafts using the logged-in user's token.
       const response = await fetch(
         `${BASE_URL}/draft/${dateKey}`,
         {
@@ -70,13 +112,11 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
         }
       );
 
-      if (!response.ok) throw new Error("Failed to fetch drafts");
+      if (!response.ok) throw createApiError(response.status);
 
       const data = await response.json();
-      console.log("Logged in user:", userId);
-      console.log("Draft API response:", data);
-      console.log("Draft fetch:", data);
 
+      // Normalize API response fields for the activity list and hour calculation.
       const formatted = data.map((item) => ({
         project: item.project_name,
         category: item.task_name,
@@ -84,7 +124,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
         endTime: item.end_time?.slice(0, 5),
         breakTime: item.break_time,
         task_description: "",
-        draft_id: item.id || item.draft_id,   //STORE DRAFT ID
+        draft_id: item.id || item.draft_id, // Retain the draft ID for later update and delete requests.
         hours: calculateHours(
           item.start_time?.slice(0, 5),
           item.end_time?.slice(0, 5),
@@ -101,7 +141,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
           (item) => item.status?.toLowerCase() === "submitted"
         );
       }
-      // If API returns empty after submission
+      // Preserve the submitted state if the API returns no drafts after submission.
       const submittedFlag = localStorage.getItem(`submitted_${dateKey}`);
       if (submittedFlag === "true") {
         isSubmitted = true;
@@ -111,27 +151,35 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
 
     } catch (error) {
       setEntries([]);
+      showApiError(
+        error,
+        "Unable to Load Timesheets",
+        "Unable to load timesheet drafts. Please try again.",
+        fetchDrafts
+      );
     } finally {
       setLoading(false);
     }
-  };
-  /*FETCH DRAFTS BY DATE*/
+  }, [dateKey, showApiError]);
+  // Load the saved drafts whenever the selected date changes.
   useEffect(() => {
     fetchDrafts();
-    setFormData(emptyForm);
+    setFormData(EMPTY_FORM);
     setEditIndex(null);
-  }, [dateKey, userId]);
+  }, [fetchDrafts]);
 
+  // Fetch the holiday description only when the selected date is a public holiday.
   useEffect(() => {
     const fetchHoliday = async () => {
-      const token = localStorage.getItem("token");
+      const token = getAccessToken();
       if (!token || !isPublicHoliday) {
         setHolidayDescription("");
         return;
       }
       try {
+        // Load the holiday description for the selected date.
         const response = await fetch(
-          `https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/calendar/public-holidays/date/${dateKey}`,
+          `${API_BASE_URL}/calendar/public-holidays/date/${dateKey}`,
           {
             method: "GET",
             headers: {
@@ -140,11 +188,8 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
             },
           }
         );
-        if (!response.ok) {
-          throw new Error("Failed to fetch holiday");
-        }
+        if (!response.ok) throw createApiError(response.status);
         const data = await response.json();
-        console.log("Holiday API:", data);
         if (Array.isArray(data) && data.length > 0) {
           setHolidayDescription(
             data[0]?.description || "Public Holiday"
@@ -154,24 +199,19 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
           setHolidayDescription("Public Holiday");
         }
       } catch (error) {
-        console.error("Holiday fetch error:", error);
         setHolidayDescription("Public Holiday");
+        showApiError(
+          error,
+          "Unable to Load Holiday Details",
+          "Unable to load holiday details. Please try again.",
+          fetchHoliday
+        );
       }
     };
     fetchHoliday();
-  }, [dateKey, isPublicHoliday]);
+  }, [dateKey, isPublicHoliday, showApiError]);
 
-  /*CALCULATE HOURS*/
-  const calculateHours = (start, end, breakMin) => {
-    if (!start || !end) return 0;
-    const s = new Date(`1970-01-01T${start}`);
-    const e = new Date(`1970-01-01T${end}`);
-    let mins = (e - s) / 60000;
-    mins -= Number(breakMin || 0);
-    return (mins / 60).toFixed(1);
-  };
-
-  /*SAVE / UPDATE*/
+  // Save a new draft or update the selected draft.
   const saveLog = async (e) => {
     e.preventDefault();
     if (submitted) {
@@ -179,12 +219,13 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
       return;
     }
 
-    const token = localStorage.getItem("token");
+    const token = getAccessToken();
     if (!token) {
       openPopup("Invalid token ❌", "error");
       return;
     }
 
+    // Validate required fields before sending the timesheet to the API.
     if (
       !formData.project.trim() ||
       !formData.category.trim() ||
@@ -196,6 +237,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
       return;
     }
 
+    // Reject invalid durations, including breaks that exceed the work interval.
     const hours = calculateHours(
       formData.startTime,
       formData.endTime,
@@ -207,6 +249,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
       return;
     }
 
+    // Match the request payload keys expected by the timesheet backend.
     const payload = {
       project_name: formData.project,
       task_name: formData.category,
@@ -222,7 +265,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
       setLoading(true);
       let response;
 
-      /*UPDATE*/
+      // Update the existing draft using its saved draft ID.
       if (editIndex !== null) {
         const draftId = entries[editIndex].draft_id;
 
@@ -239,7 +282,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
         );
       }
 
-      /*CREATE*/
+      // Create a new draft when no existing entry is being edited.
       else {
         response = await fetch(
           `${BASE_URL}/create_draft`,
@@ -254,18 +297,16 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
         );
       }
       const data = await response.json();
+      // Surface backend validation messages when the save/update request fails.
       if (!response.ok) {
-        throw new Error(
-          data.message ||
-          data.detail ||
-          data.error ||
-          "Save failed ❌"
+        throw createApiError(
+          response.status,
+          data.message || data.detail || data.error || ""
         );
       }
-      console.log("Create API Response:", data);
       await fetchDrafts();
       window.dispatchEvent(new Event("timesheetSubmitted"));
-      setFormData(emptyForm);
+      setFormData(EMPTY_FORM);
       setEditIndex(null);
 
       openPopup(
@@ -276,25 +317,27 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
         "success"
       );
     } catch (error) {
-      console.error(error);
-      openPopup(
-        error.message || error.detail || "Error saving timesheet ❌",
-        "error"
+      showApiError(
+        error,
+        "Unable to Save Timesheet",
+        "Unable to save the timesheet. Please try again.",
+        () => saveLog({ preventDefault: () => { } })
       );
     } finally {
       setLoading(false);
     }
   };
 
-  /*DELETE*/
+  // Delete the selected draft, then refresh the day's entries.
   const deleteEntry = async (index) => {
     if (submitted) return;
 
-    const token = localStorage.getItem("token");
+    const token = getAccessToken();
     const draftId = entries[index].draft_id;
 
     try {
       setLoading(true);
+      // Send the delete request for the selected draft ID.
       const response = await fetch(
         `${BASE_URL}/delete/${draftId}`,
         {
@@ -306,15 +349,11 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
       );
 
       const data = await response.json();
-      console.log("Delete API Response:", data);
       if (!response.ok) {
-        openPopup(
-          data.detail ||
-          data.message ||
-          "Delete failed ❌",
-          "error"
+        throw createApiError(
+          response.status,
+          data.detail || data.message || ""
         );
-        return;
       }
       await fetchDrafts();
       window.dispatchEvent(new Event("timesheetSubmitted"));
@@ -323,24 +362,26 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
         "success"
       );
     } catch (error) {
-      console.error("Delete error:", error);
-      openPopup(
-        error.message || error.detail || "Delete failed ❌",
-        "error"
+      showApiError(
+        error,
+        "Unable to Delete Timesheet",
+        "Unable to delete the timesheet. Please try again.",
+        () => deleteEntry(index)
       );
     } finally {
       setLoading(false);
     }
   };
 
-  /*SUBMIT DAY*/
+  // Submit the selected day and lock it after a successful response.
   const submitDay = async () => {
     if (submitted) return;
 
-    const token = localStorage.getItem("token");
 
+    const token = getAccessToken();
     try {
       setLoading(true);
+      // Send the selected work date to the submit endpoint.
       const response = await fetch(
         `${BASE_URL}/submit`,
         {
@@ -357,9 +398,6 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
 
       const data = await response.json();
 
-      console.log("Submit response status:", response.status);
-      console.log("Submit data:", data);
-
       if (response.ok) {
         setSubmitted(true);
         window.dispatchEvent(new Event("timesheetSubmitted"));
@@ -369,31 +407,32 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
         );
         return;
       } else {
-        openPopup(
-          data.detail ||
-          data.details ||
-          data.message ||
-          data.error ||
-          "Submit failed ❌",
-          "error"
+        showApiError(
+          createApiError(
+            response.status,
+            data.detail || data.details || data.message || data.error || ""
+          ),
+          "Unable to Submit Timesheet",
+          "Unable to submit the timesheet. Please try again.",
+          submitDay
         );
       }
     } catch (error) {
-      console.error("Submit error:", error);
-      openPopup(
-        error.message ||
-        error.detail ||
-        "Submit failed ❌",
-        "error"
+      showApiError(
+        error,
+        "Unable to Submit Timesheet",
+        "Unable to submit the timesheet. Please try again.",
+        submitDay
       );
     } finally {
       setLoading(false);
     }
   };
 
+  // Reload drafts from the API so the selected entry uses the latest saved values.
   const editEntry = async (index) => {
     if (isDisabled) return;
-    const token = localStorage.getItem("token");
+    const token = getAccessToken();
     try {
       setLoading(true);
       const response = await fetch(
@@ -405,11 +444,9 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
           },
         }
       );
-      if (!response.ok) {
-        throw new Error("Failed to fetch draft");
-      }
+      if (!response.ok) throw createApiError(response.status);
       const data = await response.json();
-      console.log("Edit Draft API:", data);
+      // Populate the form with the selected draft and enable update mode.
       const selectedDraft = data[index];
       setFormData({
         project: selectedDraft.project_name || "",
@@ -421,24 +458,31 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
       });
       setEditIndex(index);
     } catch (error) {
-      console.error("Edit fetch error:", error);
-      openPopup("Failed to load draft ❌", "error");
+      showApiError(
+        error,
+        "Unable to Load Draft",
+        "Unable to load the selected draft. Please try again.",
+        () => editEntry(index)
+      );
     } finally {
       setLoading(false);
     }
   };
 
+  // Close the delete confirmation after the delete handler finishes.
   const confirmDelete = async () => {
     await deleteEntry(deleteIndex);
     setShowDeleteModal(false);
     setDeleteIndex(null);
   };
 
+  // Close the submit confirmation after the submit handler finishes.
   const confirmSubmit = async () => {
     await submitDay();
     setShowSubmitModal(false);
   };
 
+  // Sum the saved activity durations for the selected day.
   const totalHours = entries.reduce(
     (sum, e) => sum + Number(e.hours || 0),
     0
@@ -446,7 +490,19 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
 
   return (
     <div className="bg-white rounded-2xl shadow-sm p-4 sm:p-6 lg:p-8 w-full">
-      {/* FULLSCREEN LOADER */}
+      {apiError && (
+        <ApiErrorModal
+          title={apiError.title}
+          message={apiError.message}
+          onRetry={apiError.onRetry ? () => {
+            const retry = apiError.onRetry;
+            setApiError(null);
+            retry();
+          } : undefined}
+          onClose={() => setApiError(null)}
+        />
+      )}
+      {/* Show a blocking loader while an API request is in progress. */}
       {loading && (
         <div className="fixed inset-0 bg-black/40 z-9999 flex items-center justify-center">
 
@@ -461,7 +517,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
           </div>
         </div>
       )}
-      {/* Header */}
+      {/* Selected date and page heading. */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-8 gap-2">
         <h2 className="text-lg sm:text-xl font-semibold text-gray-900">
           Daily Work Log
@@ -479,7 +535,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
         </div>
       </div>
 
-      {/* FORM */}
+      {/* Work-log form. */}
       <div className={`space-y-6 ${isDisabled ? "opacity-50 pointer-events-none" : ""}`}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
           <div>
@@ -578,17 +634,16 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
         </div>
       </div>
 
-      {/* Actions */}
+      {/* Save, reset, and edit actions. */}
       {!isDisabled && (
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-14 mt-8">
           {!submitted && (
             <button
               onClick={saveLog}
               disabled={loading}
-              className={`flex items-center justify-center gap-2 px-6 py-4 rounded-xl text-sm w-full sm:max-w-45 text-white
-                ${loading
-                  ? "bg-green-600 cursor-not-allowed"
-                  : "bg-green-800 hover:bg-green-700 cursor-pointer"
+              className={`flex items-center justify-center gap-2 px-6 py-4 rounded-xl text-sm w-full sm:max-w-45 text-white ${loading
+                ? "bg-green-600 cursor-not-allowed"
+                : "bg-green-800 hover:bg-green-700 cursor-pointer"
                 }`}
             >
               {loading ? (
@@ -607,8 +662,8 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
 
           <button
             onClick={() => {
-              setFormData(emptyForm);
-              setEditIndex(null);   // exit edit mode
+              setFormData(EMPTY_FORM);
+              setEditIndex(null); // Clear the form and leave edit mode.
             }}
             className="text-gray-400 text-sm"
           >
@@ -617,7 +672,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
         </div>
       )}
 
-      {/* WEEKEND NOTICE */}
+      {/* Explain why entries are disabled on weekends. */}
       {isWeekend && (
         <div className="bg-green-50 border-l-4 border-green-800 text-black-700 p-4 mt-6" role="alert">
           <p className="font-semibold">Weekend Notice</p>
@@ -656,7 +711,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
         </div>
       )}
 
-      {/* LOGGED ACTIVITIES */}
+      {/* Display the saved activities and daily total. */}
       <div className="mt-8">
         <div className="flex justify-between mb-3">
           <h3 className="font-semibold">Logged Activities</h3>
@@ -706,7 +761,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
           </button>
         )}
 
-        {/* DELETE MODAL */}
+        {/* Confirm deletion before removing a draft. */}
         {showDeleteModal && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center px-4">
             <div className="bg-white w-full max-w-xs sm:max-w-[320px] p-5 sm:p-6 rounded-lg shadow-lg text-center">
@@ -724,10 +779,9 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
                 <button
                   onClick={confirmDelete}
                   disabled={loading}
-                  className={`px-6 py-2 rounded-lg text-white
-                    ${loading
-                      ? "bg-green-600 cursor-not-allowed"
-                      : "bg-green-800 hover:bg-green-700 cursor-pointer"
+                  className={`px-6 py-2 rounded-lg text-white ${loading
+                    ? "bg-green-600 cursor-not-allowed"
+                    : "bg-green-800 hover:bg-green-700 cursor-pointer"
                     }`}
                 >
                   {loading ? (
@@ -744,7 +798,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
           </div>
         )}
 
-        {/* SUBMIT MODAL */}
+        {/* Confirm submission before locking the day. */}
         {showSubmitModal && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center px-4">
             <div className="bg-white w-full max-w-xs sm:max-w-[320px] p-5 sm:p-6 rounded-lg shadow-lg text-center">
@@ -762,10 +816,9 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
                 <button
                   onClick={confirmSubmit}
                   disabled={loading}
-                  className={`px-6 py-2 rounded-lg text-white
-                    ${loading
-                      ? "bg-green-600 cursor-not-allowed"
-                      : "bg-green-800 hover:bg-green-700 cursor-pointer"
+                  className={`px-6 py-2 rounded-lg text-white ${loading
+                    ? "bg-green-600 cursor-not-allowed"
+                    : "bg-green-800 hover:bg-green-700 cursor-pointer"
                     }`}
                 >
                   {loading ? (
@@ -782,7 +835,7 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
           </div>
         )}
 
-        {/* COMMON POPUP */}
+        {/* Show success and validation messages. */}
         {showPopup && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center px-4 z-50">
             <div className="bg-white w-full max-w-xs sm:max-w-[320px] p-5 sm:p-6 rounded-lg shadow-lg text-center">
@@ -813,4 +866,3 @@ function DailyWorkLog({ selectedDate, isLeave, isPublicHoliday }) {
 }
 
 export default DailyWorkLog;
-

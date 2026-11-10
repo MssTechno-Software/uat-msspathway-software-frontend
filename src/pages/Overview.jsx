@@ -1,19 +1,28 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { FiFilter, FiPhone, FiMail, FiUser, FiAward, FiLoader } from "react-icons/fi";
-import axios from "axios";
+import { FiPhone, FiMail, FiUser, FiAward, FiLoader } from "react-icons/fi";
+import api from "../api/axios";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
 
-const API = axios.create({
-  baseURL: "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app",
-});
-
-API.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+// Use backend messages where available and redirect on expired sessions.
+const getOverviewErrorMessage = (error, fallbackMessage) => {
+  if (error?.response?.status === 401) {
+    window.dispatchEvent(new Event("session-expired"));
   }
-  return config;
-});
+
+  const detail = error?.response?.data?.detail;
+  const backendMessage = Array.isArray(detail)
+    ? detail.map((item) => item?.msg).filter(Boolean).join(", ")
+    : detail;
+
+  return (
+    (typeof backendMessage === "string" && backendMessage.trim()) ||
+    error?.response?.data?.message ||
+    error?.response?.data?.error ||
+    getApiErrorMessage(error, fallbackMessage)
+  );
+};
+
 
 export default function Overview() {
   const { client_id } = useParams();
@@ -31,59 +40,74 @@ export default function Overview() {
   const [appliedFromDate, setAppliedFromDate] = useState("");
   const [appliedToDate, setAppliedToDate] = useState("");
   const [loading, setLoading] = useState(false);
-  const [pageLoading, setPageLoading] = useState(false);
+  const [applicationsError, setApplicationsError] = useState("");
+  const [reportsError, setReportsError] = useState("");
 
   // FETCH APPLICATIONS
+  const fetchApplications = useCallback(async () => {
+    try {
+      setLoading(true);
+      setApplicationsError("");
+      const res = await api.get(`/applications/applications/${client_id}`);
+      const appsObject = res.data?.applications || {};
+
+      const allApps = Object.entries(appsObject).flatMap(([platform, apps]) =>
+        apps.map((app) => ({ ...app, platform }))
+      );
+
+      setApplications(allApps);
+    } catch (err) {
+      setApplicationsError(
+        getOverviewErrorMessage(err, "Unable to load applications. Please try again.")
+      );
+      setApplications([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [client_id]);
 
   useEffect(() => {
-    const fetchApplications = async () => {
-      try {
-        setLoading(true);
-        const res = await API.get(`/applications/applications/${client_id}`);
-        const appsObject = res.data?.applications || {};
-
-        const allApps = Object.entries(appsObject).flatMap(([platform, apps]) =>
-          apps.map(app => ({ ...app, platform }))
-        );
-
-        setApplications(allApps);
-      } catch (err) {
-        console.error("Error fetching applications", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchApplications();
-  }, [client_id]);
+  }, [fetchApplications]);
 
   // FETCH REPORTS
-  useEffect(() => {
-    const fetchReports = async () => {
-      try {
-        setLoading(true);
-        const res = await API.get(`/reports/clients/${client_id}/reports`);
-        const responseData = res.data || {};
+  const fetchReports = useCallback(async () => {
+    try {
+      setLoading(true);
+      setReportsError("");
+      const res = await api.get(`/reports/clients/${client_id}/reports`);
+      const responseData = res.data || {};
 
-        // ADD THIS
-        setPipelineCounts({
-          calls_received: responseData.pipeline_overview?.calls_received || 0,
-          mails_received: responseData.pipeline_overview?.mails_received || 0,
-          l1_interviews: responseData.pipeline_overview?.l1_interviews || 0,
-          l2_interviews: responseData.pipeline_overview?.l2_interviews || 0,
-          offer_letters: responseData.pipeline_overview?.offer_letters || 0,
-        });
+      setPipelineCounts({
+        calls_received: responseData.pipeline_overview?.calls_received || 0,
+        mails_received: responseData.pipeline_overview?.mails_received || 0,
+        l1_interviews: responseData.pipeline_overview?.l1_interviews || 0,
+        l2_interviews: responseData.pipeline_overview?.l2_interviews || 0,
+        offer_letters: responseData.pipeline_overview?.offer_letters || 0,
+      });
 
-        const data = responseData.company_progression || [];
-        setReports(data);
-      } catch (err) {
-        console.error("Error fetching reports", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchReports();
+      const data = responseData.company_progression || [];
+      setReports(data);
+    } catch (err) {
+      setReportsError(
+        getOverviewErrorMessage(err, "Unable to load recruitment reports. Please try again.")
+      );
+      setReports([]);
+      setPipelineCounts({
+        calls_received: 0,
+        mails_received: 0,
+        l1_interviews: 0,
+        l2_interviews: 0,
+        offer_letters: 0,
+      });
+    } finally {
+      setLoading(false);
+    }
   }, [client_id]);
+
+  useEffect(() => {
+    fetchReports();
+  }, [fetchReports]);
 
   //filter
   const parseLocalDate = (dateValue, endOfDay = false) => {
@@ -302,7 +326,7 @@ export default function Overview() {
   ];
   return (
     <>
-      {(loading || pageLoading) && (
+     {loading && (
         <div className="fixed inset-0 bg-black/40 z-9999 flex items-center justify-center">
 
           <div className="p-6 flex flex-col items-center gap-3">
@@ -396,22 +420,35 @@ export default function Overview() {
               </div>
             </div>
 
-            {platformCounts.map((item, index) => (
-              <div key={index} className="mb-5">
-
-                <div className="flex justify-between text-sm sm:text-md mb-1 font-bold gap-3">
-                  <span className="wrap-break-word">{item.name}</span>
-                  <span>{item.value}</span>
-                </div>
-
-                <div className="w-full h-2 bg-[#e2cbb8] rounded-full">
-                  <div
-                    className="h-2 bg-[#3b6b4f] rounded-full"
-                    style={{ width: `${(item.value / max) * 100}%` }}
-                  />
-                </div>
+            {applicationsError ? (
+              <div className="flex flex-col items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-6 text-center" role="alert">
+                <p className="text-sm font-semibold text-red-700">Unable to load applications</p>
+                <p className="max-w-xl text-sm text-gray-600">{applicationsError}</p>
+                <button
+                  type="button"
+                  onClick={fetchApplications}
+                  className="mt-1 rounded-lg border border-green-800 px-4 py-2 text-sm font-medium text-green-800 transition hover:bg-green-50"
+                >
+                  Try Again
+                </button>
               </div>
-            ))}
+            ) : (
+              platformCounts.map((item, index) => (
+                <div key={index} className="mb-5">
+                  <div className="flex justify-between text-sm sm:text-md mb-1 font-bold gap-3">
+                    <span className="wrap-break-word">{item.name}</span>
+                    <span>{item.value}</span>
+                  </div>
+
+                  <div className="w-full h-2 bg-[#e2cbb8] rounded-full">
+                    <div
+                      className="h-2 bg-[#3b6b4f] rounded-full"
+                      style={{ width: `${(item.value / max) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              ))
+            )}
           </div>
 
           {/* RIGHT CARD */}
@@ -431,45 +468,54 @@ export default function Overview() {
               </h2>
 
               <div className="space-y-4 pt-3">
-
-                {funnel.map((item, i) => (
-                  <div
-                    key={i}
-                    className={`p-3 sm:p-4 rounded-2xl flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4
-                    ${item.highlight
-                        ? "bg-linear-to-r from-green-800 to-green-700"
-                        : "bg-white/5 backdrop-blur-md border border-white/10"
-                      }`}
-                  >
-
-                    {/* LEFT */}
-                    <div className="flex items-center gap-3 min-w-0">
-
-                      <div className="bg-white/20 p-3 rounded-xl shrink-0">
-                        {item.icon}
-                      </div>
-
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium wrap-break-word">
-                          {item.title}
-                        </p>
-
-                        <p className="text-xs text-gray-300 wrap-break-word">
-                          {item.subtitle}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* RIGHT */}
-                    <div className="text-left sm:text-right">
-                      <p className="text-lg sm:text-xl font-semibold">
-                        {item.value}
-                      </p>
-                    </div>
-
+                {reportsError ? (
+                  <div className="flex flex-col items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-6 text-center">
+                    <p className="text-sm font-semibold text-red-700">Unable to load recruitment reports</p>
+                    <p className="max-w-xl text-sm text-gray-600">{reportsError}</p>
+                    <button
+                      type="button"
+                      onClick={fetchReports}
+                      className="mt-1 rounded-lg border border-green-800 px-4 py-2 text-sm font-medium text-green-800 transition hover:bg-green-50"
+                    >
+                      Try Again
+                    </button>
                   </div>
-                ))}
+                ) : (
+                  funnel.map((item, i) => (
+                    <div
+                      key={i}
+                      className={`p-3 sm:p-4 rounded-2xl flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4
+                      ${item.highlight
+                          ? "bg-linear-to-r from-green-800 to-green-700"
+                          : "bg-white/5 backdrop-blur-md border border-white/10"
+                        }`}
+                    >
+                      {/* LEFT */}
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="bg-white/20 p-3 rounded-xl shrink-0">
+                          {item.icon}
+                        </div>
 
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium wrap-break-word">
+                            {item.title}
+                          </p>
+
+                          <p className="text-xs text-gray-300 wrap-break-word">
+                            {item.subtitle}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* RIGHT */}
+                      <div className="text-left sm:text-right">
+                        <p className="text-lg sm:text-xl font-semibold">
+                          {item.value}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>

@@ -1,10 +1,24 @@
 import { useParams } from "react-router-dom";
-import { use, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import axios from "axios";
 import { FiDownload, FiEye, FiUpload, FiEdit, FiTrash2, FiLoader } from "react-icons/fi";
 import AddEmployee from "./AddEmployee";
+import ApiErrorModal from "../container/ApiErrorModal";
+import { API_BASE_URL } from "../api/axios";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
+import { getAccessToken } from "../services/authSession";
 
-const BASE_URL = "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app";
+const BASE_URL = API_BASE_URL;
+
+// Redirect to sign-in when an API request reports an expired session.
+const dispatchSessionExpiredIfNeeded = (error) => {
+  if (error?.response?.status !== 401) {
+    return false;
+  }
+
+  window.dispatchEvent(new Event("session-expired"));
+  return true;
+};
 
 function EmployeeProfile() {
   const { employee_id } = useParams();
@@ -18,8 +32,14 @@ function EmployeeProfile() {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [profileUrl, setProfileUrl] = useState(null);
   const [profileFile, setProfileFile] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [pageLoading, setPageLoading] = useState(false);
+  const [employeeLoading, setEmployeeLoading] = useState(true);
+  const [employeeError, setEmployeeError] = useState("");
+  const [documentsLoading, setDocumentsLoading] = useState(true);
+  const [documentsError, setDocumentsError] = useState("");
+  const [photoLoading, setPhotoLoading] = useState(true);
+  const [photoError, setPhotoError] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
+  const [apiError, setApiError] = useState(null);
   const [popup, setPopup] = useState({
     show: false,
     message: "",
@@ -27,116 +47,233 @@ function EmployeeProfile() {
     onConfirm: null
   });
 
-  const getAuthHeaders = () => {
-    const token = localStorage.getItem("token");
+  const getAuthHeaders = useCallback(() => {
+    const token = getAccessToken();
     return {
       headers: {
         Authorization: token ? `Bearer ${token}` : "",
       },
     };
-  };
+  }, []);
 
-  // FETCH EMPLOYEE data
-  const fetchEmployee = async () => {
-    console.log("Fetching employee data for ID:", employee_id);
+  // Fetch employee details independently from optional profile resources.
+  const fetchEmployee = useCallback(async () => {
+    setEmployeeLoading(true);
+    setEmployeeError("");
+
     try {
-      setLoading(true);
       const res = await axios.get(
         `${BASE_URL}/admin/users/${employee_id}`,
         getAuthHeaders()
       );
 
-      console.log("Employee data response:", res.data);
       const data = res.data?.data ?? res.data;
+      if (!data || typeof data !== "object") {
+        throw new Error("Employee details were not returned by the server.");
+      }
+
       setEmployee(data);
+      return true;
     } catch (err) {
-      console.error("Error fetching employee data:", err.response || err.message);
+      const message = getApiErrorMessage(
+        err,
+        "Unable to load employee details. Please try again."
+      );
+      const sessionExpired = dispatchSessionExpiredIfNeeded(err);
+      setEmployeeError(message);
+
+      if (!sessionExpired) {
+        setApiError({
+          title: "Unable to Load Employee Profile",
+          message,
+          onRetry: () => fetchEmployee(),
+        });
+      }
+
+      return false;
     } finally {
-      setLoading(false);
+      setEmployeeLoading(false);
     }
-  };
+  }, [employee_id, getAuthHeaders]);
 
   useEffect(() => {
-    if (employee_id) fetchEmployee();
-  }, [employee_id]);
+    if (employee_id) {
+      fetchEmployee();
+    } else {
+      setEmployeeLoading(false);
+      setEmployeeError("Employee ID is missing.");
+    }
+  }, [employee_id, fetchEmployee]);
 
-  // FETCH DOCUMENTS
-  const fetchDocuments = async () => {
+  // Fetch documents separately so a document-service failure does not hide the profile.
+  const fetchDocuments = useCallback(async () => {
+    setDocumentsLoading(true);
+    setDocumentsError("");
+
     try {
-      setLoading(true);
       const res = await axios.get(
         `${BASE_URL}/documents/employees/${employee_id}/documents`,
         getAuthHeaders()
       );
-      console.log("Documents response:", res.data);
-      setDocuments(res.data.documents || []);
+
+      const documentList = res.data?.documents;
+      setDocuments(Array.isArray(documentList) ? documentList : []);
     } catch (err) {
-      console.error("Error fetching documents:", err.response || err.message);
+      setDocuments([]);
+      setDocumentsError(
+        getApiErrorMessage(
+          err,
+          "Unable to load employee documents. Please try again."
+        )
+      );
+      dispatchSessionExpiredIfNeeded(err);
     } finally {
-      setLoading(false);
+      setDocumentsLoading(false);
     }
-  };
+  }, [employee_id, getAuthHeaders]);
 
   useEffect(() => {
-    if (employee_id) fetchDocuments();
-  }, [employee_id]);
+    if (employee_id) {
+      fetchDocuments();
+    } else {
+      setDocumentsLoading(false);
+    }
+  }, [employee_id, fetchDocuments]);
 
-  //fetch profile photo if exists
-  const fetchProfilePhoto = async () => {
-    console.log("Fetching profile photo for employee ID:", employee_id);
+  // A missing or unavailable profile photo falls back to the employee initials.
+  const fetchProfilePhoto = useCallback(async () => {
+    setPhotoLoading(true);
+    setPhotoError("");
+
     try {
-      setLoading(true);
       const res = await axios.get(
         `${BASE_URL}/documents/employees/${employee_id}/profile-picture-view`,
         {
           responseType: "blob",
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           },
         }
       );
-      console.log("Profile photo response:", res.data);
-      const url = URL.createObjectURL(res.data);
-      setProfileUrl(url);
+
+      if (!res.data || res.data.size === 0) {
+        throw new Error("Profile photo is unavailable.");
+      }
+
+      setProfileUrl(URL.createObjectURL(res.data));
     } catch (err) {
-      console.error("Error fetching profile photo:", err);
-      setProfileUrl("");
+      setProfileUrl(null);
+      setPhotoError(
+        getApiErrorMessage(err, "Profile photo is unavailable.")
+      );
+      dispatchSessionExpiredIfNeeded(err);
     } finally {
-      setLoading(false);
+      setPhotoLoading(false);
     }
-  };
+  }, [employee_id]);
 
   useEffect(() => {
     if (employee_id) {
       fetchProfilePhoto();
+    } else {
+      setPhotoLoading(false);
     }
-  }, [employee_id]);
+  }, [employee_id, fetchProfilePhoto]);
 
-  if (!employee) {
-    return <div className="p-6">Loading employee details...</div>;
+  // Release temporary image URLs when previews or server images change.
+  useEffect(() => {
+    return () => {
+      if (profileUrl?.startsWith("blob:")) {
+        URL.revokeObjectURL(profileUrl);
+      }
+    };
+  }, [profileUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (profilePreview?.startsWith("blob:")) {
+        URL.revokeObjectURL(profilePreview);
+      }
+    };
+  }, [profilePreview]);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl?.startsWith("blob:")) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
+  // Use one shared modal for failures from user-triggered API actions.
+  const showApiError = (error, title, fallbackMessage, onRetry) => {
+    if (dispatchSessionExpiredIfNeeded(error)) {
+      return;
+    }
+
+    setApiError({
+      title,
+      message: getApiErrorMessage(error, fallbackMessage),
+      onRetry,
+    });
+  };
+
+  const retryApiAction = async () => {
+    const retry = apiError?.onRetry;
+    setApiError(null);
+
+    if (retry) {
+      await retry();
+    }
+  };
+
+  if (employeeLoading && !employee) {
+    return (
+      <div className="flex min-h-[45vh] flex-col items-center justify-center gap-3 p-6 text-center">
+        <FiLoader className="animate-spin text-3xl text-green-800" />
+        <p className="text-sm font-medium text-gray-600">Loading employee profile...</p>
+      </div>
+    );
   }
 
-  const handleUpdateEmployee = () => {
-    console.log("Updating employee data for ID:", employee_id);
-    setEmployee((prev) => ({
-      ...prev,
-      first_name: prev.first_name || "",
-      last_name: prev.last_name || "",
-      email: prev.email || "",
-      mobile: prev.mobile || "",
-      aadhaar_number: prev.aadhaar_number || "",
-      role: prev.role || "",
-      location: prev.location || "",
-      start_date: prev.start_date || "",
-      end_date: prev.end_date || ""
-    }));
-    setPopup({
-      show: true,
-      message: "Employee data updated successfully",
-      type: "success"
-    });
-    setShowEdit(true);
-  };
+  if (!employee && employeeError) {
+    return (
+      <>
+        <div className="flex min-h-[55vh] flex-col items-center justify-center p-6 text-center">
+          <div className="flex w-full max-w-lg flex-col items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-6">
+            <p className="text-sm font-semibold text-red-700">Unable to load employee profile</p>
+            <p className="text-sm text-gray-600">{employeeError}</p>
+            <button
+              type="button"
+              onClick={fetchEmployee}
+              className="rounded-lg bg-green-800 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-700"
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+        {apiError && (
+          <ApiErrorModal
+            title={apiError.title}
+            message={apiError.message}
+            onRetry={apiError.onRetry ? retryApiAction : undefined}
+            onClose={() => setApiError(null)}
+          />
+        )}
+      </>
+    );
+  }
+
+  if (!employee) {
+    return (
+      <div className="p-6 text-sm text-gray-600">
+        Employee profile is unavailable.
+        <button type="button" onClick={fetchEmployee} className="ml-2 font-semibold text-green-800 underline">
+          Reload
+        </button>
+      </div>
+    );
+  }
 
   // UPLOAD documents
   const handleUpload = async () => {
@@ -148,25 +285,20 @@ function EmployeeProfile() {
       });
     }
     try {
-      setLoading(true);
+      setActionLoading(true);
       const formData = new FormData();
       formData.append("files", selectedFile);
       formData.append("employee_id", employee_id);
 
-      for (let pair of formData.entries()) {
-        console.log(pair[0], pair[1]);
-      }
-
-      const response = await axios.post(
+      await axios.post(
         `${BASE_URL}/documents/employees/${employee_id}/upload-documents`,
         formData,
         {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           }
         }
       );
-      console.log("Upload response:", response.data);
 
       setPopup({
         show: true,
@@ -175,36 +307,37 @@ function EmployeeProfile() {
       });
       setShowDocModal(false);
       setSelectedFile(null);
+      setPreviewUrl(null);
       fetchDocuments();
     } catch (err) {
-      console.error("Error uploading document:", err.response || err.message);
-      setPopup({
-        show: true,
-        message: "Failed to upload document",
-        type: "error"
-      });
+      showApiError(
+        err,
+        "Document upload failed",
+        "Unable to upload the selected document. Please try again.",
+        () => handleUpload()
+      );
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   };
 
   //VIEW documnets
   const handleView = async (doc) => {
-    console.log("Viewing document:", doc);
     try {
-      setLoading(true);
-      console.log("VIEW FILE ID:", doc.file_id);
+      setActionLoading(true);
       const res = await axios.get(
         `${BASE_URL}/documents/files/view`,
         {
           params: { file_id: doc.file_id },
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           },
         }
       );
-      console.log("Document view response:", res.data);
-      const viewUrl = res.data.view_url;
+      const viewUrl = res.data?.view_url;
+      if (!viewUrl) {
+        throw new Error("The document preview link was not returned.");
+      }
       window.open(viewUrl, "_blank");
       setPopup({
         show: true,
@@ -213,34 +346,34 @@ function EmployeeProfile() {
       });
       fetchDocuments();
     } catch (err) {
-      console.error("Error viewing document:", err.response || err.message);
-      setPopup({
-        show: true,
-        message: "Failed to open document",
-        type: "error"
-      });
+      showApiError(
+        err,
+        "Document could not be opened",
+        "Unable to open this document. Please try again.",
+        () => handleView(doc)
+      );
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   };
 
   // DOWNLOAD documents
   const handleDownload = async (doc) => {
-    console.log("Downloading document:", doc);
     try {
-      setLoading(true);
-      console.log("DOWNLOAD FILE ID:", doc.file_id);
+      setActionLoading(true);
       const res = await axios.get(
         `${BASE_URL}/documents/files/download`,
         {
           params: { file_id: doc.file_id },
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           }
         }
       );
-      console.log("Download response:", res.data);
-      const downloadUrl = res.data.download_url;
+      const downloadUrl = res.data?.download_url;
+      if (!downloadUrl) {
+        throw new Error("The document download link was not returned.");
+      }
 
       const link = document.createElement("a");
       link.href = downloadUrl;
@@ -256,41 +389,37 @@ function EmployeeProfile() {
       });
       fetchDocuments();
     } catch (err) {
-      console.error("Full error:", err.response || err);
-      setPopup({
-        show: true,
-        message: "Failed to download document",
-        type: "error"
-      });
+      showApiError(
+        err,
+        "Document download failed",
+        "Unable to download this document. Please try again.",
+        () => handleDownload(doc)
+      );
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   };
 
   // DELETE documents
   const handleDelete = (doc) => {
-    console.log("Deleting document:", doc);
-    const gcsPath = doc.url;
-    console.log("DELETE PATH:", gcsPath);
     setPopup({
       show: true,
       message: "Are you sure you want to delete this document?",
       type: "confirm",
       onConfirm: async () => {
         try {
-          setLoading(true);
-          const res = await axios.delete(
+          setActionLoading(true);
+          await axios.delete(
             `${BASE_URL}/documents/employees/${employee_id}/documents`,
             {
               params: {
                 file_id: doc.file_id
               },
               headers: {
-                Authorization: `Bearer ${localStorage.getItem("token")}`
+                Authorization: `Bearer ${getAccessToken()}`
               }
             }
           );
-          console.log("Delete response:", res.data);
           setPopup({
             show: true,
             message: "Document deleted successfully",
@@ -298,14 +427,15 @@ function EmployeeProfile() {
           });
           fetchDocuments();
         } catch (err) {
-          console.error("Full error:", err.response || err);
-          setPopup({
-            show: true,
-            message: "Failed to delete document",
-            type: "error"
-          });
+          setPopup({ show: false, message: "", type: "", onConfirm: null });
+          showApiError(
+            err,
+            "Document deletion failed",
+            "Unable to delete this document. Please try again.",
+            () => handleDelete(doc)
+          );
         } finally {
-          setLoading(false);
+          setActionLoading(false);
         }
       }
     });
@@ -354,6 +484,7 @@ function EmployeeProfile() {
 
     setProfileFile(file);
     setProfilePreview(URL.createObjectURL(file));
+    setPhotoError("");
   };
 
   const profileImage = profileFile
@@ -374,22 +505,19 @@ function EmployeeProfile() {
     }
 
     try {
-      setLoading(true);
+      setActionLoading(true);
       const formData = new FormData();
       formData.append("file", profileFile);
-      console.log("PROFILE FILE:", profileFile);
-      console.log("Uploading profile photo for employee ID:", employee_id);
 
-      const res = await axios.post(
+      await axios.post(
         `${BASE_URL}/documents/employees/${employee_id}/profile-picture`,
         formData,
         {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           },
         }
       );
-      console.log("Profile upload response:", res.data);
 
       setPopup({
         show: true,
@@ -398,55 +526,56 @@ function EmployeeProfile() {
       });
 
       setShowPhotoModal(false);
-      setProfilePreview("");
+      setProfilePreview(null);
       setProfileFile(null);
+      setPhotoError("");
       await fetchProfilePhoto();
     } catch (err) {
-      console.error("Profile upload error:", err.response || err);
-      setPopup({
-        show: true,
-        message: "Failed to upload profile photo",
-        type: "error"
-      });
+      showApiError(
+        err,
+        "Profile photo upload failed",
+        "Unable to upload the profile photo. Please try again.",
+        () => handleUploadProfile()
+      );
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   };
 
   /* DELETE PROFILE PHOTO */
   const handleDeleteProfile = async () => {
     try {
-      setLoading(true);
-      const res = await axios.delete(
+      setActionLoading(true);
+      await axios.delete(
         `${BASE_URL}/documents/employees/${employee_id}/profile-picture`,
         {
           ...getAuthHeaders(),
           params: { gcs_path: profileUrl }
         }
       );
-      console.log("Profile photo delete response:", res.data);
       setPopup({
         show: true,
         message: "Profile photo deleted successfully",
         type: "success"
       });
       setProfileUrl(null);
+      setPhotoError("");
       setShowPhotoModal(false);
     } catch (err) {
-      console.error("Profile delete error:", err.response || err);
-      setPopup({
-        show: true,
-        message: "Failed to delete profile photo",
-        type: "error"
-      });
+      showApiError(
+        err,
+        "Profile photo deletion failed",
+        "Unable to delete the profile photo. Please try again.",
+        () => handleDeleteProfile()
+      );
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   };
 
   return (
     <>
-      {(loading || pageLoading) && (
+      {actionLoading && (
         <div className="fixed inset-0 bg-black/40 z-9999 flex items-center justify-center">
 
           <div className="p-6 flex flex-col items-center gap-3">
@@ -461,6 +590,15 @@ function EmployeeProfile() {
         </div>
       )}
       <div className="w-full min-w-0 p-2 sm:p-4 md:p-6 bg-white min-h-screen overflow-x-hidden">
+        {employeeError && employee && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert">
+            <span>{employeeError}</span>
+            <button type="button" onClick={fetchEmployee} className="font-semibold underline">
+              Retry profile
+            </button>
+          </div>
+        )}
+
         {/* HEADER */}
         <div className="flex flex-col lg:flex-row lg:justify-between lg:items-start gap-4 w-full min-w-0">
           <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 text-center sm:text-left">
@@ -471,6 +609,17 @@ function EmployeeProfile() {
               {profileImage ? (
                 <img
                   src={profileImage}
+                  alt={`${employee.first_name || "Employee"} profile`}
+                  onError={() => {
+                    if (profileFile) {
+                      setProfileFile(null);
+                      setProfilePreview(null);
+                    }
+                    if (profileUrl) {
+                      setProfileUrl(null);
+                    }
+                    setPhotoError("The profile photo could not be displayed.");
+                  }}
                   className="w-24 h-24 sm:w-28 sm:h-28 rounded-full object-cover shadow"
                 />
               ) : (
@@ -485,6 +634,15 @@ function EmployeeProfile() {
                 >
                   {initials}
                 </div>
+              )}
+              {photoLoading && !profileImage && (
+                <span
+                  className="absolute inset-0 flex items-center justify-center rounded-full bg-white/70"
+                  role="status"
+                  aria-label="Loading profile photo"
+                >
+                  <FiLoader className="animate-spin text-xl text-green-800" />
+                </span>
               )}
               <button
                 onClick={() => setShowPhotoModal(true)}
@@ -501,6 +659,14 @@ function EmployeeProfile() {
               <p className="text-base sm:text-lg font-semibold mt-1">
                 {employee.designation || "No Designation"}
               </p>
+              {photoError && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                  <span>{photoError || "Profile photo unavailable."}</span>
+                  <button type="button" onClick={fetchProfilePhoto} className="font-semibold text-green-800 underline">
+                    Retry photo
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -588,7 +754,20 @@ function EmployeeProfile() {
             </button>
           </div>
 
-          {documents.length ? (
+          {documentsLoading ? (
+            <div className="flex items-center justify-center gap-3 p-8 text-sm text-gray-500" role="status">
+              <FiLoader className="animate-spin text-xl text-green-800" />
+              Loading employee documents...
+            </div>
+          ) : documentsError ? (
+            <div className="flex flex-col items-center gap-2 p-8 text-center" role="alert">
+              <p className="text-sm font-semibold text-red-700">Unable to load documents</p>
+              <p className="max-w-xl text-sm text-gray-600">{documentsError}</p>
+              <button type="button" onClick={fetchDocuments} className="mt-1 rounded-lg border border-green-800 px-4 py-2 text-sm font-medium text-green-800 transition hover:bg-green-50">
+                Try Again
+              </button>
+            </div>
+          ) : documents.length ? (
             documents.map((doc, i) => {
               const fileName = doc.original_name || "document";
               const fileType = fileName.split(".").pop().toUpperCase();
@@ -634,7 +813,9 @@ function EmployeeProfile() {
               );
             })
           ) : (
-            <p className="p-6 text-gray-400">No documents available</p>
+            <div className="p-6 text-center text-sm text-gray-400">
+              No documents available for this employee.
+            </div>
           )}
         </div>
 
@@ -685,7 +866,11 @@ function EmployeeProfile() {
               {/* ACTIONS */}
               <div className="flex flex-col sm:flex-row justify-end gap-3 mt-6">
                 <button
-                  onClick={() => setShowDocModal(false)}
+                  onClick={() => {
+                    setShowDocModal(false);
+                    setSelectedFile(null);
+                    setPreviewUrl(null);
+                  }}
                   className="px-4 py-2 bg-gray-200 rounded-lg cursor-pointer"
                 >
                   Cancel
@@ -772,6 +957,12 @@ function EmployeeProfile() {
 
         {showEdit && (
           <AddEmployee
+            key={
+              employee?.id ??
+              employee?.employee_id ??
+              employee?.email ??
+              "employee-profile-edit"
+            }
             editingEmployee={employee}
             onClose={() => setShowEdit(false)}
             onSave={async (formData) => {
@@ -858,7 +1049,7 @@ function EmployeeProfile() {
               }
 
               try {
-                setLoading(true);
+                setActionLoading(true);
                 const data = new FormData();
                 data.append("first_name", formData.first_name.trim());
                 data.append("last_name", formData.last_name.trim());
@@ -883,41 +1074,38 @@ function EmployeeProfile() {
                   data.append("end_date", "currently working");
                 }
 
-                for (let [k, v] of data.entries()) {
-                  console.log(k, v);
-                }
-
                 await axios.put(
                   `${BASE_URL}/admin/users/${employee_id}`,
                   data,
                   {
                     headers: {
-                      Authorization: `Bearer ${localStorage.getItem("token")}`,
+                      Authorization: `Bearer ${getAccessToken()}`,
                       "Content-Type": "multipart/form-data"
                     }
                   }
                 );
 
-                await fetchEmployee();
+                const refreshed = await fetchEmployee();
+                setShowEdit(false);
+
+                if (!refreshed) {
+                  return;
+                }
+
                 setPopup({
                   show: true,
                   message: "Employee updated successfully",
                   type: "success"
                 });
-                setShowEdit(false);
 
               } catch (err) {
-                console.log("FULL BACKEND ERROR:", err.response?.data);
-                setPopup({
-                  show: true,
-                  message:
-                    err.response?.data?.detail ||
-                    err.response?.data?.message ||
-                    "Update failed",
-                  type: "error"
-                });
+                showApiError(
+                  err,
+                  "Employee update failed",
+                  "Unable to update employee details. Please try again."
+                );
               } finally {
-                setLoading(false);
+                setActionLoading(false);
               }
             }}
             setPopup={setPopup}
@@ -967,6 +1155,14 @@ function EmployeeProfile() {
         )}
 
       </div>
+      {apiError && (
+        <ApiErrorModal
+          title={apiError.title}
+          message={apiError.message}
+          onRetry={apiError.onRetry ? retryApiAction : undefined}
+          onClose={() => setApiError(null)}
+        />
+      )}
     </>
   );
 }

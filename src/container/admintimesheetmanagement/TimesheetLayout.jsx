@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import  { useState } from "react";
 import {
   useSearchParams,
 } from "react-router-dom";
@@ -6,7 +6,7 @@ import {
 import WeeklyTimesheet from "./WeeklyTimesheet";
 import MonthlyTimesheet from "./MonthlyTimesheet";
 
-function AdminTimesheetManagement() {
+function TimesheetLayout() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const initialView =
@@ -70,11 +70,11 @@ function AdminTimesheetManagement() {
             className={`
               rounded-md
               px-5
+              cursor-pointer
               py-2.5
               text-sm
               font-semibold
               transition-all
-              cursor-pointer
               duration-200
               ${
                 view === "monthly"
@@ -108,4 +108,4 @@ function AdminTimesheetManagement() {
   );
 }
 
-export default AdminTimesheetManagement;
+export default TimesheetLayout;

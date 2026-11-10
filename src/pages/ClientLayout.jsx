@@ -14,20 +14,24 @@ import {
   FiArrowLeft,
   FiChevronLeft,
   FiChevronRight,
+  FiCalendar,
 } from "react-icons/fi";
 
 import { useState, useEffect } from "react";
+import { getUserRole } from "../services/authSession";
 
 function ClientLayout() {
   const { client_id } = useParams();
-
-  const [clientName, setClientName] = useState("");
   const [openSidebar, setOpenSidebar] = useState(false);
-
   const navigate = useNavigate();
   const location = useLocation();
-  const role = localStorage.getItem("role");
+  const role = getUserRole();
   const isActive = (path) => location.pathname.includes(path);
+
+  const clientName =
+    location.state?.clientName ||
+    localStorage.getItem(`clientName_${client_id}`) ||
+    "";
 
   useEffect(() => {
     if (location.state?.clientName) {
@@ -35,16 +39,8 @@ function ClientLayout() {
         `clientName_${client_id}`,
         location.state.clientName
       );
-
-      setClientName(location.state.clientName);
-    } else {
-      const storedName = localStorage.getItem(
-        `clientName_${client_id}`
-      );
-
-      if (storedName) setClientName(storedName);
     }
-  }, [location.state, client_id]);
+  }, [location.state?.clientName, client_id]);
 
   const handleBack = () => {
     navigate(
@@ -55,7 +51,6 @@ function ClientLayout() {
   };
 
   return (
-    // <div className="flex min-h-screen">
     <div className="flex h-screen overflow-hidden">
       {/* SIDEBAR */}
       <div
@@ -72,7 +67,6 @@ function ClientLayout() {
           ${openSidebar ? "w-64" : "w-20"}
         `}
       >
-
         {/* TOGGLE BUTTON */}
         <button
           onClick={() => setOpenSidebar(!openSidebar)}
@@ -89,6 +83,7 @@ function ClientLayout() {
             z-50
             cursor-pointer
           "
+          aria-label={openSidebar ? "Collapse sidebar" : "Expand sidebar"}
         >
           {openSidebar ? (
             <FiChevronLeft size={20} />
@@ -100,9 +95,7 @@ function ClientLayout() {
         <div>
           {/* HEADER */}
           <div className="px-4 py-6 border-b border-white/10">
-
             <div className="flex items-center gap-3">
-
               {/* BACK BUTTON */}
               <button
                 onClick={handleBack}
@@ -112,19 +105,17 @@ function ClientLayout() {
                   cursor-pointer hover:text-gray-300
                   transition-all duration-200
                 "
+                aria-label="Back to clients"
               >
                 <FiArrowLeft size={20} />
               </button>
 
               {openSidebar && (
-                <div>
+                <div className="min-w-0">
                   <h1 className="text-2xl font-semibold truncate">
                     {clientName}
                   </h1>
-
-                  <p className="text-md text-gray-300">
-                    Client Dashboard
-                  </p>
+                  <p className="text-md text-gray-300">Client Dashboard</p>
                 </div>
               )}
             </div>
@@ -132,7 +123,6 @@ function ClientLayout() {
 
           {/* MENU */}
           <div className="mt-4 space-y-1">
-
             {/* CLIENT PROFILE */}
             <div
               onClick={() => navigate(`/clients/${client_id}`)}
@@ -141,6 +131,7 @@ function ClientLayout() {
                 ${!location.pathname.includes("applications") &&
                   !location.pathname.includes("credentials") &&
                   !location.pathname.includes("reports") &&
+                  !location.pathname.includes("schedule-interview") &&
                   !location.pathname.includes("overview")
                   ? "border-l-4 border-green-800 bg-white/10"
                   : "hover:bg-white/10"
@@ -148,7 +139,6 @@ function ClientLayout() {
               `}
             >
               <FiUser size={20} />
-
               {openSidebar && <span>Client Profile</span>}
             </div>
 
@@ -168,7 +158,6 @@ function ClientLayout() {
               `}
             >
               <FiFileText size={20} />
-
               {openSidebar && <span>Applications</span>}
             </div>
 
@@ -188,7 +177,6 @@ function ClientLayout() {
               `}
             >
               <FiKey size={20} />
-
               {openSidebar && <span>Credentials</span>}
             </div>
 
@@ -208,8 +196,26 @@ function ClientLayout() {
               `}
             >
               <FiBarChart2 size={20} />
-
               {openSidebar && <span>Reports</span>}
+            </div>
+
+            {/* SCHEDULE INTERVIEW */}
+            <div
+              onClick={() =>
+                navigate(`/clients/${client_id}/schedule-interview`, {
+                  state: { clientName },
+                })
+              }
+              className={`
+                flex items-center gap-3 px-6 py-3 cursor-pointer
+                ${isActive("schedule-interview")
+                  ? "border-l-4 border-green-800 bg-white/10"
+                  : "hover:bg-white/10"
+                }
+              `}
+            >
+              <FiCalendar size={20} />
+              {openSidebar && <span>Schedule Interview</span>}
             </div>
 
             {/* OVERVIEW */}
@@ -228,7 +234,6 @@ function ClientLayout() {
               `}
             >
               <FiGrid size={20} />
-
               {openSidebar && <span>Overview</span>}
             </div>
           </div>
@@ -244,9 +249,7 @@ function ClientLayout() {
           p-6
           transition-all duration-300
           w-[calc(100%-16rem)]
-          ${openSidebar
-            ? "ml-64"
-            : "ml-20 w-[calc(100%-5rem)]"}
+          ${openSidebar ? "ml-64" : "ml-20 w-[calc(100%-5rem)]"}
         `}
       >
         <Outlet />

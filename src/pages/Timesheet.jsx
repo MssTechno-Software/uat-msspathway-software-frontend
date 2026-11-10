@@ -5,6 +5,7 @@ import Guideline from "../container/Guideline";
 import Leave from "../container/Leave";
 import PublicHoliday from "../container/PublicHoliday";
 import PublicHolidayTable from "../container/PublicHolidaysList";
+import { getUserRole } from "../services/authSession";
 
 function Timesheet() {
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -61,7 +62,7 @@ function Timesheet() {
               />
             </div>
 
-            {localStorage.getItem("role") !== "super admin" ? (
+            {getUserRole() !== "super admin" ? (
               <div className="w-full">
                 <Leave />
               </div>
@@ -78,7 +79,7 @@ function Timesheet() {
 
           {/* RIGHT PANEL */}
           <div className="w-full min-w-0 overflow-hidden">
-            {localStorage.getItem("role") === "super admin" ? (
+            {getUserRole() === "super admin" ? (
               <PublicHolidayTable />
             ) : (
 

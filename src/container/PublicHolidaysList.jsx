@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CalendarDays, Trash2 } from "lucide-react";
+import api from "../api/axios";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
+import ApiErrorModal from "./ApiErrorModal";
 
 function PublicHolidayTable() {
-
     const [holidays, setHolidays] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [apiError, setApiError] = useState(null);
     const [popup, setPopup] = useState({
         show: false,
         message: "",
@@ -13,78 +16,74 @@ function PublicHolidayTable() {
     });
 
     /* FETCH HOLIDAYS */
-    const fetchHolidays = async () => {
-        const token = localStorage.getItem("token");
-
-        if (!token) return;
+    // Load the current year’s holidays and show a retry option if the request fails.
+    const fetchHolidays = useCallback(async () => {
         try {
             setLoading(true);
-            const response = await fetch(
-                "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/calendar/public-holidays/current-year",
-                {
-                    method: "GET",
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                    },
-                }
+
+            const response = await api.get(
+                "/calendar/public-holidays/current-year"
             );
-            if (!response.ok) {
-                throw new Error("Failed to fetch holidays");
-            }
-            const data = await response.json();
-            console.log("Public Holidays:", data);
-            setHolidays(data || []);
+
+            setHolidays(response.data || []);
         } catch (error) {
-            console.error(error);
+            // A 401 means the session has expired, so let the app handle sign-out.
+            // Keep expired-session handling consistent with the holiday fetch request.
+            if (
+                error?.response?.status === 401 ||
+                error?.status === 401
+            ) {
+                setApiError(null);
+                window.dispatchEvent(new Event("session-expired"));
+                return;
+            }
+
+            setApiError({
+                title: "Unable to Load Holidays",
+                message: getApiErrorMessage(
+                    error,
+                    "Unable to load public holidays. Please try again."
+                ),
+                onRetry: fetchHolidays,
+            });
         } finally {
             setLoading(false);
         }
-    };
-    useEffect(() => {
-        fetchHolidays();
     }, []);
 
+    // Fetch holidays when the table first loads.
+    useEffect(() => {
+        fetchHolidays();
+    }, [fetchHolidays]);
+
+    // Refresh the table when another component adds or updates a public holiday.
     useEffect(() => {
         const refreshHolidays = () => {
             fetchHolidays();
         };
 
         window.addEventListener(
-            "timesheetSubmitted",
+            "publicHolidayUpdated",
             refreshHolidays
         );
 
         return () => {
             window.removeEventListener(
-                "timesheetSubmitted",
+                "publicHolidayUpdated",
                 refreshHolidays
             );
         };
-
-    }, []);
+    }, [fetchHolidays]);
 
     /* DELETE HOLIDAY */
+    // Delete the selected holiday, then update the table without another fetch.
     const deleteHoliday = async (holidayId) => {
-
-        const token = localStorage.getItem("token");
-
         try {
-
-            const response = await fetch(
-                `https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/calendar/public-holidays/${holidayId}`,
-                {
-                    method: "DELETE",
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                    },
-                }
+            await api.delete(
+                `/calendar/public-holidays/${holidayId}`
             );
 
-            if (!response.ok) {
-                throw new Error("Delete failed");
-            }
-
-            /* REMOVE FROM UI */
+            // Remove the deleted holiday from the displayed list.
             setHolidays((prev) =>
                 prev.filter(
                     (item) =>
@@ -98,21 +97,43 @@ function PublicHolidayTable() {
                 type: "success",
                 message: "Holiday deleted successfully ✅",
             });
-
         } catch (error) {
+            if (
+                error?.response?.status === 401 ||
+                error?.status === 401
+            ) {
+                setApiError(null);
+                window.dispatchEvent(new Event("session-expired"));
+                return;
+            }
 
-            console.error(error);
-
-            setPopup({
-                show: true,
-                type: "error",
-                message: "Failed to delete holiday ❌",
+            setApiError({
+                title: "Unable to Delete Holiday",
+                message: getApiErrorMessage(
+                    error,
+                    "Failed to delete holiday. Please try again."
+                ),
+                onRetry: () => deleteHoliday(holidayId),
             });
         }
     };
 
     return (
         <div className="bg-white rounded-2xl shadow-sm p-4 sm:p-6 lg:p-8 w-full">
+            {/* Show API errors in a shared modal, including its retry action. */}
+            {apiError && (
+                <ApiErrorModal
+                    title={apiError.title}
+                    message={apiError.message}
+                    onRetry={() => {
+                        const retry = apiError.onRetry;
+                        setApiError(null);
+                        retry?.();
+                    }}
+                    onClose={() => setApiError(null)}
+                />
+            )}
+
             {/* HEADER */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-2">
                 <h2 className="text-lg sm:text-xl font-semibold text-gray-900">
@@ -127,11 +148,11 @@ function PublicHolidayTable() {
                     <span>
                         Holiday Calendar
                     </span>
-
                 </div>
             </div>
 
             {/* TABLE */}
+            {/* Show loading, empty, or holiday rows based on the current request state. */}
             <div className="overflow-x-auto rounded-2xl border border-gray-200 shadow-sm">
                 <table className="w-full min-w-125">
                     <thead>
@@ -150,6 +171,7 @@ function PublicHolidayTable() {
                             </th>
                         </tr>
                     </thead>
+
                     <tbody>
                         {loading ? (
                             <tr>
@@ -160,9 +182,7 @@ function PublicHolidayTable() {
                                     Loading holidays...
                                 </td>
                             </tr>
-
                         ) : holidays.length === 0 ? (
-
                             <tr>
                                 <td
                                     colSpan={3}
@@ -171,9 +191,7 @@ function PublicHolidayTable() {
                                     No public holidays found
                                 </td>
                             </tr>
-
                         ) : (
-
                             holidays.map((holiday, index) => (
                                 <tr
                                     key={index}
@@ -182,20 +200,25 @@ function PublicHolidayTable() {
                                     <td className="px-4 py-4 text-sm text-gray-700">
                                         {index + 1}
                                     </td>
+
                                     <td className="px-4 py-4 text-sm text-gray-700">
                                         {holiday.holiday_date || holiday.date}
                                     </td>
+
                                     <td className="px-4 py-4 text-sm text-gray-700">
                                         {holiday.description}
                                     </td>
+
                                     <td className="px-4 py-4">
                                         <div className="flex justify-center">
                                             <button
                                                 onClick={() => {
-
+                                                    // Support both holiday ID fields returned by the API.
                                                     const holidayId =
                                                         holiday.holiday_id ||
                                                         holiday.id;
+
+                                                    // Ask for confirmation before sending the delete request.
                                                     setPopup({
                                                         show: true,
                                                         type: "confirm",
@@ -214,8 +237,8 @@ function PublicHolidayTable() {
                                                 <Trash2
                                                     size={18}
                                                     className="
-                                                    text-gray-500
-                                                    group-hover:text-red-600
+                                                        text-gray-500
+                                                        group-hover:text-red-600
                                                     "
                                                 />
                                             </button>
@@ -227,17 +250,20 @@ function PublicHolidayTable() {
                     </tbody>
                 </table>
             </div>
+
             {/* POPUP */}
+            {/* Reuse this popup for delete confirmation and success/error messages. */}
             {popup.show && (
                 <div className="fixed inset-0 bg-black/40 flex items-center justify-center px-4 z-50">
                     <div className="bg-white w-full max-w-xs sm:max-w-[320px] p-5 sm:p-6 rounded-xl shadow-lg text-center">
                         <h3
-                            className={`text-lg font-semibold mb-2 ${popup.type === "error"
-                                ? "text-red-600"
-                                : popup.type === "success"
-                                    ? "text-green-600"
-                                    : "text-gray-900"
-                                }`}
+                            className={`text-lg font-semibold mb-2 ${
+                                popup.type === "error"
+                                    ? "text-red-600"
+                                    : popup.type === "success"
+                                        ? "text-green-600"
+                                        : "text-gray-900"
+                            }`}
                         >
                             {popup.type === "confirm"
                                 ? "Delete Holiday"
@@ -245,9 +271,11 @@ function PublicHolidayTable() {
                                     ? "Error"
                                     : "Success"}
                         </h3>
+
                         <p className="text-gray-600 text-sm">
                             {popup.message}
                         </p>
+
                         <div className="flex justify-center gap-4 mt-5">
                             {popup.type === "confirm" ? (
                                 <>
@@ -267,7 +295,8 @@ function PublicHolidayTable() {
 
                                     <button
                                         onClick={() => {
-                                            popup.onConfirm();
+                                            // Close the confirmation popup before running the saved action.
+                                            const confirmAction = popup.onConfirm;
 
                                             setPopup({
                                                 show: false,
@@ -275,6 +304,8 @@ function PublicHolidayTable() {
                                                 type: "",
                                                 onConfirm: null,
                                             });
+
+                                            confirmAction?.();
                                         }}
                                         className="px-5 py-2 bg-red-500 text-white rounded-xl hover:bg-red-600 text-sm"
                                     >

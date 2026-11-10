@@ -1,176 +1,250 @@
 import { useParams } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
-import { FiDownload, FiEye, FiUpload, FiEdit, FiTrash2, FiLoader } from "react-icons/fi";
-import AddEmployee from "./AddEmployee";
+import { FiDownload, FiEye, FiUpload, FiEdit, FiLoader } from "react-icons/fi";
+import { API_BASE_URL } from "../api/axios";
+import ApiErrorModal from "../container/ApiErrorModal";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
+import { getAccessToken } from "../services/authSession";
 
-const BASE_URL = "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app";
+const BASE_URL = API_BASE_URL;
 
 function MyProfilePage() {
   const { employee_id } = useParams();
   const [employee, setEmployee] = useState(null);
-  const [showEdit, setShowEdit] = useState(false);
   const [documents, setDocuments] = useState([]);
-  const [showDocModal, setShowDocModal] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null);
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [profilePreview, setProfilePreview] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState(null);
   const [profileUrl, setProfileUrl] = useState(null);
   const [profileFile, setProfileFile] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [pageLoading, setPageLoading] = useState(false);
   const [popup, setPopup] = useState({
     show: false,
     message: "",
     type: "",
     onConfirm: null
   });
+  const [apiError, setApiError] = useState(null);
+  const [employeeLoadError, setEmployeeLoadError] = useState("");
+  const [documentsError, setDocumentsError] = useState("");
+  const [profilePhotoError, setProfilePhotoError] = useState("");
+  const [profilePhotoLoading, setProfilePhotoLoading] = useState(true);
+  const pendingRequests = useRef(0);
 
-  console.log("employee_id:", employee_id);
-
-  const getAuthHeaders = () => {
-    const token = localStorage.getItem("token");
+  const getAuthHeaders = useCallback(() => {
+    const token = getAccessToken();
     return {
       headers: {
         Authorization: token ? `Bearer ${token}` : "",
       },
     };
-  };
+  }, []);
 
+  // Keep the loader active while any parallel request is still running.
+  const startLoading = useCallback(() => {
+    pendingRequests.current += 1;
+    setLoading(true);
+  }, []);
+
+  const stopLoading = useCallback(() => {
+    pendingRequests.current = Math.max(0, pendingRequests.current - 1);
+    if (pendingRequests.current === 0) {
+      setLoading(false);
+    }
+  }, []);
+
+  // Keep the existing session-expired flow for every 401 response.
+  const handleUnauthorized = useCallback((error) => {
+    if (error?.response?.status === 401) {
+      window.dispatchEvent(new Event("session-expired"));
+    }
+  }, []);
   // FETCH EMPLOYEE data
-  const fetchEmployee = async () => {
-    console.log("Fetching employee data for ID:", employee_id);
-    console.log("Fetching employee:", employee_id);
-    console.log("TOKEN:", localStorage.getItem("token"));
+  const fetchEmployee = useCallback(async () => {
+    if (!employee_id) return;
+
+    startLoading();
+    setEmployeeLoadError("");
+
     try {
-      setLoading(true);
       const res = await axios.get(
         `${BASE_URL}/admin/users/${employee_id}`,
         getAuthHeaders()
       );
 
-      console.log("Employee data response:", res.data);
       const data = res.data?.data ?? res.data;
+
+      if (!data || data?.detail) {
+        throw new Error(
+          typeof data?.detail === "string"
+            ? data.detail
+            : "Employee profile not found."
+        );
+      }
+
       setEmployee(data);
-      //setDocuments(data.documents || []);
     } catch (err) {
-      console.error("Error fetching employee data:", err.response || err.message);
+      handleUnauthorized(err);
+
+      const responseMessage =
+        err?.response?.data?.detail ||
+        err?.response?.data?.message;
+      const message =
+        (typeof responseMessage === "string" && responseMessage.trim()) ||
+        (err?.response?.status === 404
+          ? "Employee profile not found."
+          : !err?.response && !err?.request && err?.message
+            ? err.message
+            : getApiErrorMessage(
+                err,
+                "Unable to load employee profile. Please try again."
+              ));
+
+      setEmployee(null);
+      setEmployeeLoadError(message);
+      setApiError({
+        title: err?.response?.status === 404
+          ? "Profile Not Found"
+          : "Unable to Load Profile",
+        message,
+        retryAction: "employee"
+      });
     } finally {
-      setLoading(false);
+      stopLoading();
     }
-  };
+  }, [employee_id, getAuthHeaders, handleUnauthorized, startLoading, stopLoading]);
 
   useEffect(() => {
-    console.log("useEffect triggered");
     if (employee_id) fetchEmployee();
-  }, [employee_id]);
+  }, [employee_id, fetchEmployee]);
 
   // FETCH DOCUMENTS
-  const fetchDocuments = async () => {
+  const fetchDocuments = useCallback(async () => {
+    if (!employee_id) return;
+
+    startLoading();
+    setDocumentsError("");
+
     try {
-      setLoading(true);
       const res = await axios.get(
         `${BASE_URL}/documents/employees/${employee_id}/documents`,
         getAuthHeaders()
       );
-      console.log("Documents response:", res.data);
-      setDocuments(res.data.documents || []);
+      const nextDocuments = res.data?.documents || [];
+      setDocuments(Array.isArray(nextDocuments) ? nextDocuments : []);
     } catch (err) {
-      console.error("Error fetching documents:", err.response || err.message);
+      handleUnauthorized(err);
+      setDocuments([]);
+      setDocumentsError(
+        getApiErrorMessage(err, "Unable to load documents. Please try again.")
+      );
     } finally {
-      setLoading(false);
+      stopLoading();
     }
-  };
+  }, [employee_id, getAuthHeaders, handleUnauthorized, startLoading, stopLoading]);
 
   useEffect(() => {
     if (employee_id) fetchDocuments();
-  }, [employee_id]);
+  }, [employee_id, fetchDocuments]);
 
-  //fetch profile photo
-  const fetchProfilePhoto = async () => {
-    console.log("Fetching profile photo for employee ID:", employee_id);
+  // Fetch the profile photo; the initials remain visible if this request fails.
+  const fetchProfilePhoto = useCallback(async () => {
+    if (!employee_id) return;
+
+    startLoading();
+    setProfilePhotoLoading(true);
+    setProfilePhotoError("");
+
     try {
-      setLoading(true);
       const res = await axios.get(
         `${BASE_URL}/documents/employees/${employee_id}/profile-picture-view`,
         {
           responseType: "blob",
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           },
         }
       );
-      console.log("Profile photo response:", res.data);
       const url = URL.createObjectURL(res.data);
       setProfileUrl(url);
+      setProfilePhotoError("");
     } catch (err) {
-      console.error("Error fetching profile photo:", err);
+      handleUnauthorized(err);
       setProfileUrl("");
+      setProfilePhotoError(
+        getApiErrorMessage(err, "Profile photo unavailable. Please try again.")
+      );
     } finally {
-      setLoading(false);
+      setProfilePhotoLoading(false);
+      stopLoading();
     }
-  };
+  }, [employee_id, handleUnauthorized, startLoading, stopLoading]);
 
   useEffect(() => {
     if (employee_id) {
       fetchProfilePhoto();
     }
-  }, [employee_id]);
+  }, [employee_id, fetchProfilePhoto]);
 
-  //VIEW documnets
+  // VIEW DOCUMENT
   const handleView = async (doc) => {
-    console.log("Viewing document:", doc);
+    startLoading();
+
     try {
-      setLoading(true);
-      console.log("VIEW FILE ID:", doc.file_id);
       const res = await axios.get(
         `${BASE_URL}/documents/files/view`,
         {
           params: { file_id: doc.file_id },
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           },
         }
       );
-      console.log("Document view response:", res.data);
-      const viewUrl = res.data.view_url;
+      const viewUrl = res.data?.view_url;
+
+      if (!viewUrl) {
+        throw new Error("Document view link is unavailable.");
+      }
+
       window.open(viewUrl, "_blank");
       setPopup({
         show: true,
         message: "Document opened in new tab",
         type: "success"
       });
-      fetchDocuments();
+      await fetchDocuments();
     } catch (err) {
-      console.error("Error viewing document:", err.response || err.message);
-      setPopup({
-        show: true,
-        message: "Failed to open document",
-        type: "error"
+      handleUnauthorized(err);
+      setApiError({
+        title: "Unable to Open Document",
+        message: getApiErrorMessage(err, "Failed to open document. Please try again."),
+        retryAction: "viewDocument",
+        document: doc
       });
     } finally {
-      setLoading(false);
+      stopLoading();
     }
   };
 
-  // DOWNLOAD documents
+  // DOWNLOAD DOCUMENT
   const handleDownload = async (doc) => {
-    console.log("Downloading document:", doc);
+    startLoading();
+
     try {
-      setLoading(true);
-      console.log("DOWNLOAD FILE ID:", doc.file_id);
       const res = await axios.get(
         `${BASE_URL}/documents/files/download`,
         {
           params: { file_id: doc.file_id },
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           }
         }
       );
-      console.log("Download response:", res.data);
-      const downloadUrl = res.data.download_url;
+      const downloadUrl = res.data?.download_url;
+
+      if (!downloadUrl) {
+        throw new Error("Document download link is unavailable.");
+      }
 
       const link = document.createElement("a");
       link.href = downloadUrl;
@@ -184,16 +258,17 @@ function MyProfilePage() {
         message: "Download started",
         type: "success"
       });
-      fetchDocuments();
+      await fetchDocuments();
     } catch (err) {
-      console.error("Full error:", err.response || err);
-      setPopup({
-        show: true,
-        message: "Failed to download document",
-        type: "error"
+      handleUnauthorized(err);
+      setApiError({
+        title: "Unable to Download Document",
+        message: getApiErrorMessage(err, "Failed to download document. Please try again."),
+        retryAction: "downloadDocument",
+        document: doc
       });
     } finally {
-      setLoading(false);
+      stopLoading();
     }
   };
 
@@ -234,23 +309,21 @@ function MyProfilePage() {
       return;
     }
 
+    startLoading();
+
     try {
-      setLoading(true);
       const formData = new FormData();
       formData.append("file", profileFile);
-      console.log("PROFILE FILE:", profileFile);
-      console.log("Uploading profile photo for employee ID:", employee_id);
 
-      const res = await axios.post(
+      await axios.post(
         `${BASE_URL}/documents/employees/${employee_id}/profile-picture`,
         formData,
         {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           },
         }
       );
-      console.log("Profile upload response:", res.data);
 
       setPopup({
         show: true,
@@ -263,29 +336,29 @@ function MyProfilePage() {
       setProfileFile(null);
       await fetchProfilePhoto();
     } catch (err) {
-      console.error("Profile upload error:", err.response || err);
-      setPopup({
-        show: true,
-        message: "Failed to upload profile photo",
-        type: "error"
+      handleUnauthorized(err);
+      setApiError({
+        title: "Profile Photo Upload Failed",
+        message: getApiErrorMessage(err, "Failed to upload profile photo. Please try again."),
+        retryAction: "uploadProfile"
       });
     } finally {
-      setLoading(false);
+      stopLoading();
     }
   };
 
   /* DELETE PROFILE PHOTO */
   const handleDeleteProfile = async () => {
+    startLoading();
+
     try {
-      setLoading(true);
-      const res = await axios.delete(
+      await axios.delete(
         `${BASE_URL}/documents/employees/${employee_id}/profile-picture`,
         {
           ...getAuthHeaders(),
           params: { gcs_path: profileUrl }
         }
       );
-      console.log("Deleting profile picture response:", res.data);
       setPopup({
         show: true,
         message: "Profile photo deleted successfully",
@@ -293,22 +366,43 @@ function MyProfilePage() {
       });
       setProfileUrl(null);
       setShowPhotoModal(false);
-      fetchProfilePhoto();
+      await fetchProfilePhoto();
     } catch (err) {
-      console.error("Profile delete error:", err.response || err);
-      setPopup({
-        show: true,
-        message: "Failed to delete profile photo",
-        type: "error"
+      handleUnauthorized(err);
+      setApiError({
+        title: "Profile Photo Delete Failed",
+        message: getApiErrorMessage(err, "Failed to delete profile photo. Please try again."),
+        retryAction: "deleteProfile"
       });
     } finally {
-      setLoading(false);
+      stopLoading();
     }
+  };
+
+  const handleApiErrorRetry = () => {
+    const retryAction = apiError?.retryAction;
+    const document = apiError?.document;
+    setApiError(null);
+
+    if (retryAction === "employee") fetchEmployee();
+    if (retryAction === "viewDocument" && document) handleView(document);
+    if (retryAction === "downloadDocument" && document) handleDownload(document);
+    if (retryAction === "uploadProfile") handleUploadProfile();
+    if (retryAction === "deleteProfile") handleDeleteProfile();
   };
 
   return (
     <>
-      {(loading || pageLoading) && (
+      {apiError && (
+        <ApiErrorModal
+          title={apiError.title}
+          message={apiError.message}
+          onRetry={apiError.retryAction ? handleApiErrorRetry : undefined}
+          onClose={() => setApiError(null)}
+        />
+      )}
+
+      {loading && (
         <div className="fixed inset-0 bg-black/40 z-9999 flex items-center justify-center">
 
           <div className="p-6 flex flex-col items-center gap-3">
@@ -323,10 +417,33 @@ function MyProfilePage() {
         </div>
       )}
       <div className="p-6 bg-white min-h-screen">
-        {!employee && (
-          <div className="p-6 text-gray-500">Loading my profile...</div>
-        )}
-
+        {!employee ? (
+          <div className="flex min-h-[55vh] items-center justify-center px-4">
+            {employeeLoadError ? (
+              !apiError && <div
+                role="alert"
+                className="w-full max-w-md rounded-2xl border border-red-200 bg-red-50 p-8 text-center shadow-sm"
+              >
+                <h2 className="text-lg font-semibold text-red-600">
+                  Profile details unavailable
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-red-600">
+                  {employeeLoadError}
+                </p>
+                <button
+                  type="button"
+                  onClick={fetchEmployee}
+                  className="mt-5 rounded-lg bg-green-800 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-green-700"
+                >
+                  Try Again
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">Loading profile details...</p>
+            )}
+          </div>
+        ) : (
+          <>
         {/* HEADER */}
         <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6">
 
@@ -336,6 +453,13 @@ function MyProfilePage() {
             {profileImage ? (
               <img
                 src={profileImage}
+                alt="Employee profile"
+                onError={() => {
+                  if (!profileFile) {
+                    setProfileUrl("");
+                    setProfilePhotoError("Unable to display the profile photo.");
+                  }
+                }}
                 className="w-24 h-24 sm:w-28 sm:h-28 rounded-full object-cover shadow"
               />
             ) : (
@@ -354,11 +478,20 @@ function MyProfilePage() {
 
             <button
               onClick={() => setShowPhotoModal(true)}
-              className="absolute bottom-0 right-0 bg-white p-2 rounded-full shadow cursor-pointer"
+              className="absolute bottom-0 right-0 bg-white p-3 rounded-full shadow cursor-pointer"
             >
               {profileUrl ? <FiEdit /> : <FiUpload />}
             </button>
 
+            {profilePhotoError && !profilePhotoLoading && !profileImage && (
+              <button
+                type="button"
+                onClick={fetchProfilePhoto}
+                className="mt-2 block max-w-[140px] text-xs font-medium text-red-600 underline underline-offset-2"
+              >
+                Photo unavailable. Retry
+              </button>
+            )}
           </div>
 
           {/* TEXT */}
@@ -439,7 +572,18 @@ function MyProfilePage() {
             </div>
           </div>
 
-          {documents.length ? (
+          {documentsError ? (
+            <div className="p-6 text-gray-500" role="status">
+              <p>{documentsError}</p>
+              <button
+                type="button"
+                onClick={fetchDocuments}
+                className="mt-3 rounded-lg bg-green-800 px-4 py-2 text-white hover:bg-green-700"
+              >
+                Try Again
+              </button>
+            </div>
+          ) : documents.length ? (
             documents.map((doc, i) => {
               const fileName = doc.original_name || "document";
               const fileType = fileName.split(".").pop().toUpperCase();
@@ -597,6 +741,8 @@ function MyProfilePage() {
           </div>
         )}
 
+          </>
+        )}
       </div>
     </>
   );

@@ -1,30 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { FiMail, FiLock, FiEye, FiEyeOff, FiLink } from "react-icons/fi";
 import { BsBuilding } from "react-icons/bs";
 
 function AddCredential({ onClose, onSave, editingData, setPopup }) {
 
-    const [form, setForm] = useState({
-        portal: "",
-        portalLink: "",
-        email: "",
-        password: "",
-        notes: ""
-    });
+  const [form, setForm] = useState(() => ({
+    portal: editingData?.portal || "",
+    portalLink: editingData?.portalLink || "",
+    email: editingData?.email || "",
+    password: editingData?.password || "",
+    notes: editingData?.notes || ""
+}));
 
     const [showPassword, setShowPassword] = useState(false);
 
-    useEffect(() => {
-        if (editingData) {
-            setForm({
-                portal: editingData.portal || "",
-                portalLink: editingData.portalLink || "",
-                email: editingData.email || "",
-                password: editingData.password || "",
-                notes: editingData.notes || ""
-            });
-        }
-    }, [editingData]);
 
     const handleChange = (e) => {
         setForm({

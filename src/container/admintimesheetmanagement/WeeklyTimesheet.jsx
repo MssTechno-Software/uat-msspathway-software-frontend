@@ -2,11 +2,14 @@ import React, {
     useCallback,
     useEffect,
     useMemo,
+    useRef,
     useState,
 } from "react";
 import { FiLoader } from "react-icons/fi";
 import TimesheetDetailModal from "./TimesheetDetailModal";
+import ApiErrorModal from "../ApiErrorModal";
 import api from "../../api/axios";
+import { getApiErrorMessage } from "../../utils/apiErrorHandler";
 
 const dashboardRequests = new Map();
 
@@ -236,10 +239,8 @@ function WeeklyTimesheet() {
         setLoading,
     ] = useState(false);
 
-    const [
-        error,
-        setError,
-    ] = useState("");
+    const [apiError, setApiError] = useState(null);
+    const weeklyRequestIdRef = useRef(0);
     const [
         selectedDay,
         setSelectedDay,
@@ -296,11 +297,12 @@ function WeeklyTimesheet() {
     }, [weekStart]);
       // Fetch the selected week directly from the backend.
     const loadWeeklyTimesheet = useCallback(async () => {
-        let cancelled = false;
+        const requestId = ++weeklyRequestIdRef.current;
+        const isCurrent = () => weeklyRequestIdRef.current === requestId;
 
         try {
             setLoading(true);
-            setError("");
+            setApiError(null);
 
             // API: GET weekly admin timesheet dashboard
             // Purpose: Reload employees, summary, and weekly timesheet data
@@ -324,13 +326,6 @@ function WeeklyTimesheet() {
 
                         return response.data;
                     })
-                    .catch((error) => {
-                        const message =
-                            error?.response?.data?.detail ||
-                            `Unable to load weekly timesheet (${error?.response?.status || "unknown"})`;
-
-                        throw new Error(message);
-                    })
                     .finally(() => {
                         dashboardRequests.delete(requestKey);
                     });
@@ -340,7 +335,7 @@ function WeeklyTimesheet() {
 
             const data = await requestPromise;
 
-            if (cancelled) {
+            if (!isCurrent()) {
                 return;
             }
 
@@ -373,31 +368,40 @@ function WeeklyTimesheet() {
             setSummary(normalizedSummary);
             setEmployees(loadedEmployees);
         } catch (err) {
-            if (cancelled) {
+            if (!isCurrent()) {
                 return;
             }
 
-            console.error("Weekly Timesheet API Error:", err);
+            if (err?.response?.status === 401) {
+                setEmployees([]);
+                setSummary(DEFAULT_SUMMARY);
+                window.dispatchEvent(new Event("session-expired"));
+                return;
+            }
 
-            setError(
-                err?.message ||
-                "Unable to load weekly timesheet."
-            );
+            setApiError({
+                title: "Unable to Load Weekly Timesheet",
+                message: getApiErrorMessage(
+                    err,
+                    "Unable to load weekly timesheet."
+                ),
+            });
             setEmployees([]);
             setSummary(DEFAULT_SUMMARY);
         } finally {
-            if (!cancelled) {
+            if (isCurrent()) {
                 setLoading(false);
             }
         }
-
-        return () => {
-            cancelled = true;
-        };
     }, [weekStart]);
 
     useEffect(() => {
         loadWeeklyTimesheet();
+
+        // Ignore results from a previous week or a request started before unmount.
+        return () => {
+            weeklyRequestIdRef.current += 1;
+        };
     }, [loadWeeklyTimesheet]);
 
     // Move to the previous week.
@@ -553,13 +557,6 @@ function WeeklyTimesheet() {
 
                         return response.data;
                     })
-                    .catch((error) => {
-                        const message =
-                            error?.response?.data?.detail ||
-                            `Unable to load timesheet details (${error?.response?.status || "unknown"})`;
-
-                        throw new Error(message);
-                    })
                     .finally(() => {
                         dayDetailRequests.delete(
                             requestKey
@@ -576,14 +573,17 @@ function WeeklyTimesheet() {
 
             setDayDetails(data);
         } catch (err) {
-            console.error(
-                "Timesheet Day Detail Error:",
-                err
-            );
+            if (err?.response?.status === 401) {
+                closeDetailPopup();
+                window.dispatchEvent(new Event("session-expired"));
+                return;
+            }
 
             setDetailError(
-                err?.message ||
-                "Unable to load timesheet details."
+                getApiErrorMessage(
+                    err,
+                    "Unable to load timesheet details."
+                )
             );
         } finally {
             setDetailLoading(false);
@@ -635,6 +635,18 @@ function WeeklyTimesheet() {
 
     return (
         <>
+            {apiError && (
+                <ApiErrorModal
+                    title={apiError.title}
+                    message={apiError.message}
+                    onRetry={() => {
+                        setApiError(null);
+                        loadWeeklyTimesheet();
+                    }}
+                    onClose={() => setApiError(null)}
+                />
+            )}
+
             {loading && (
                 <div className="fixed inset-0 bg-black/40 z-[9999] flex items-center justify-center">
                     <div className="p-6 flex flex-col items-center gap-3">
@@ -722,14 +734,6 @@ function WeeklyTimesheet() {
                         )}
                     />
                 </div>
-
-                {error && (
-                    <div
-                        className="mb-5 rounded-[4px] border border-[#ead2d2] bg-[#fffafa] px-4 py-3 text-[11px] text-[#8b2d2d]"
-                    >
-                        {error}
-                    </div>
-                )}
 
                 <div
                     className="relative w-full overflow-x-auto overflow-y-auto border border-[#e5d8d2] bg-white [-webkit-overflow-scrolling:touch]"

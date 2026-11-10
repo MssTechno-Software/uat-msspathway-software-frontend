@@ -1,10 +1,47 @@
 import { useParams } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import axios from "axios";
-import { FiDownload, FiEye, FiEdit, FiTrash2, FiUpload, FiX, FiPenTool, FiLink, FiLoader } from "react-icons/fi";
+import { FiDownload, FiEye, FiEdit, FiTrash2, FiUpload, FiLink, FiLoader } from "react-icons/fi";
 import AddClient from "./AddClient";
+import ApiErrorModal from "../container/ApiErrorModal";
+import { API_BASE_URL } from "../api/axios";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
+import { getAccessToken } from "../services/authSession";
 
-const BASE_URL = "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app";
+const BASE_URL = API_BASE_URL;
+
+const getClientRequestErrorMessage = (error, fallbackMessage) => {
+  if (error?.response?.status === 401) {
+    window.dispatchEvent(new Event("session-expired"));
+  }
+
+  const responseData = error?.response?.data;
+  const detail = responseData?.detail;
+
+  if (typeof detail === "string" && detail.trim()) {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => (typeof item === "string" ? item : item?.msg))
+      .filter(Boolean);
+
+    if (messages.length > 0) {
+      return messages.join(", ");
+    }
+  }
+
+  if (typeof responseData?.message === "string" && responseData.message.trim()) {
+    return responseData.message;
+  }
+
+  if (!error?.response && !error?.request && error?.message) {
+    return error.message;
+  }
+
+  return getApiErrorMessage(error, fallbackMessage);
+};
 
 function ClientProfile() {
   const { client_id } = useParams();
@@ -22,134 +59,252 @@ function ClientProfile() {
   const [profilePreview, setProfilePreview] = useState("");
   const [profileUrl, setProfileUrl] = useState("");
   const [showPhotoModal, setShowPhotoModal] = useState(false);
+  // Keep action loading separate from the independent profile fetches.
   const [loading, setLoading] = useState(false);
+  const [clientLoading, setClientLoading] = useState(true);
+  const [clientError, setClientError] = useState("");
+  const [documentsLoading, setDocumentsLoading] = useState(true);
+  const [documentsError, setDocumentsError] = useState("");
+  const [linksLoading, setLinksLoading] = useState(true);
+  const [linksError, setLinksError] = useState("");
+  const [profilePhotoLoading, setProfilePhotoLoading] = useState(true);
+  const [profilePhotoError, setProfilePhotoError] = useState("");
+  const [apiError, setApiError] = useState(null);
   const [popup, setPopup] = useState({
     show: false,
     message: "",
     type: "",
     onConfirm: null
   });
-  const getAuthHeaders = () => {
-    const token = localStorage.getItem("token");
+  const getAuthHeaders = useCallback(() => {
+    const token = getAccessToken();
     return {
       headers: {
         Authorization: token ? `Bearer ${token}` : "",
       },
     };
-  };
+  }, []);
 
-  const fetchClient = async () => {
-    console.log("Fetching client ID:", client_id);
+  // Load core client details; a failure here gets a main-page fallback.
+  const fetchClient = useCallback(async () => {
+    setClientLoading(true);
+    setClientError("");
+
     try {
-      setLoading(true);
       const res = await axios.get(
         `${BASE_URL}/clients/clients/${client_id}`,
         getAuthHeaders()
       );
-
-      console.log("CLIENT DATA:", res.data);
       setClient(res.data);
-
     } catch (err) {
-      console.error("API ERROR:", err.response?.data || err.message);
+      const message = getClientRequestErrorMessage(
+        err,
+        "Unable to load client details."
+      );
+      setClientError(message);
+      // Show the shared API modal first; the inline fallback appears after it is closed.
+      setApiError((current) => current || {
+        title: "Unable to Load Client Details",
+        message,
+        retryAction: "client",
+      });
     } finally {
-      setLoading(false);
+      setClientLoading(false);
     }
-  };
+  }, [client_id, getAuthHeaders]);
 
   useEffect(() => {
     if (client_id) {
       fetchClient();
+    } else {
+      setClientLoading(false);
+      setClientError("Client ID is missing.");
     }
-  }, [client_id]);
+  }, [client_id, fetchClient]);
 
-  /*fetch documents*/
-  const fetchDocuments = async () => {
+  // Load documents independently so a document API failure does not hide the profile.
+  const fetchDocuments = useCallback(async () => {
+    setDocumentsLoading(true);
+    setDocumentsError("");
+
     try {
-      setLoading(true);
       const res = await axios.get(
         `${BASE_URL}/documents/clients/${client_id}/documents`,
         getAuthHeaders()
       );
-      console.log("Documents API Response:", res.data);
-      setDocuments(res.data.documents || []);
+      setDocuments(Array.isArray(res.data?.documents) ? res.data.documents : []);
     } catch (err) {
-      console.error("Error fetching documents:", err);
+      const message = getClientRequestErrorMessage(
+        err,
+        "Unable to load client documents."
+      );
+      // A documents request can fail independently; show the fallback in this section.
+      setDocumentsError(message);
     } finally {
-      setLoading(false);
+      setDocumentsLoading(false);
     }
-  };
+  }, [client_id, getAuthHeaders]);
 
   useEffect(() => {
     if (client_id) {
       fetchDocuments();
+    } else {
+      setDocumentsLoading(false);
     }
-  }, [client_id]);
+  }, [client_id, fetchDocuments]);
 
-  /*fetch link*/
-  const fetchLinks = async () => {
+  // Load source links independently from the documents and main profile.
+  const fetchLinks = useCallback(async () => {
+    setLinksLoading(true);
+    setLinksError("");
+
     try {
-      setLoading(true);
       const res = await axios.get(
         `${BASE_URL}/clients/clients/${client_id}/source-links`,
         getAuthHeaders()
       );
-      console.log("Links API Response:", res.data);
-
-      setLinks(res.data.source_links || []);
-
+      setLinks(Array.isArray(res.data?.source_links) ? res.data.source_links : []);
     } catch (err) {
-      console.error("Error fetching links:", err);
+      const message = getClientRequestErrorMessage(
+        err,
+        "Unable to load client links."
+      );
+      // Keep link-loading errors in the links section instead of opening the main modal.
+      setLinksError(message);
     } finally {
-      setLoading(false);
+      setLinksLoading(false);
     }
-  };
+  }, [client_id, getAuthHeaders]);
 
   useEffect(() => {
     if (client_id) {
       fetchLinks();
+    } else {
+      setLinksLoading(false);
     }
-  }, [client_id]);
+  }, [client_id, fetchLinks]);
 
-  /*fetch profile photo*/
-  const fetchProfilePhotoView = async () => {
-    console.log("Fetching profile photo for client ID:", client_id);
+  // Load the profile photo separately; initials remain available as a fallback.
+  const fetchProfilePhotoView = useCallback(async () => {
+    setProfilePhotoLoading(true);
+    setProfilePhotoError("");
+
     try {
-      setLoading(true);
       const res = await axios.get(
         `${BASE_URL}/documents/clients/${client_id}/profile-picture-view`,
         {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           },
           responseType: "blob",
         }
       );
-      console.log("Profile View Response:", res.data);
-      const imageURL = URL.createObjectURL(res.data);
-      setProfileUrl(imageURL);
-
+      setProfileUrl(URL.createObjectURL(res.data));
     } catch (err) {
-      console.error("Profile photo fetch failed:", err);
-      setProfileUrl("");
+      const message = getClientRequestErrorMessage(
+        err,
+        "Unable to load the profile photo."
+      );
+      // The avatar initials and local retry control are the fallback for photo-load errors.
+      setProfilePhotoError(message);
     } finally {
-      setLoading(false);
+      setProfilePhotoLoading(false);
     }
-  };
+  }, [client_id]);
 
   useEffect(() => {
     if (client_id) {
       fetchProfilePhotoView();
+    } else {
+      setProfilePhotoLoading(false);
     }
-  }, [client_id]);
+  }, [client_id, fetchProfilePhotoView]);
+
+  // Release temporary preview URLs when a file changes or the page unmounts.
+  useEffect(() => {
+    return () => {
+      if (previewURL?.startsWith("blob:")) {
+        URL.revokeObjectURL(previewURL);
+      }
+    };
+  }, [previewURL]);
+
+  useEffect(() => {
+    return () => {
+      if (profilePreview?.startsWith("blob:")) {
+        URL.revokeObjectURL(profilePreview);
+      }
+    };
+  }, [profilePreview]);
+
+  useEffect(() => {
+    return () => {
+      if (profileUrl?.startsWith("blob:")) {
+        URL.revokeObjectURL(profileUrl);
+      }
+    };
+  }, [profileUrl]);
+
+  const handleApiErrorRetry = () => {
+    const retryAction = apiError?.retryAction;
+    setApiError(null);
+
+    if (retryAction === "client") fetchClient();
+    if (retryAction === "documents") fetchDocuments();
+    if (retryAction === "links") fetchLinks();
+    if (retryAction === "photo") fetchProfilePhotoView();
+  };
+
+  const apiErrorModal = apiError ? (
+    <ApiErrorModal
+      title={apiError.title}
+      message={apiError.message}
+      onRetry={apiError.retryAction ? handleApiErrorRetry : undefined}
+      onClose={() => setApiError(null)}
+    />
+  ) : null;
 
   if (!client) {
-    return <div className="p-6">Loading client details...</div>;
+    return (
+      <>
+        <div className="min-h-screen bg-white p-4 sm:p-6">
+          {clientLoading ? (
+            <div className="flex min-h-[240px] flex-col items-center justify-center gap-3 text-gray-600">
+              <FiLoader className="animate-spin text-3xl text-green-800" />
+              <p className="text-sm font-medium">Loading client details...</p>
+            </div>
+          ) : clientError ? (
+            !apiError && (
+              <div className="flex min-h-[55vh] items-center justify-center px-4">
+                <div
+                  role="alert"
+                  className="w-full max-w-md rounded-2xl border border-red-200 bg-red-50 p-8 text-center shadow-sm"
+                >
+                  <h2 className="text-lg font-semibold text-red-600">
+                    Profile details unavailable
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-red-600">
+                    {clientError}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={fetchClient}
+                    className="mt-5 rounded-lg bg-green-800 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-green-700"
+                  >
+                    Try Again
+                  </button>
+                </div>
+              </div>
+            )
+          ) : null}
+        </div>
+        {apiErrorModal}
+      </>
+    );
   }
 
   /*update client*/
   const handleUpdate = async (updatedData) => {
-    console.log("Updating client with data:", updatedData);
     try {
       setLoading(true);
       // REQUIRED VALIDATIONS
@@ -298,10 +453,7 @@ function ClientProfile() {
       formData.append("notes", updatedData.notes);
 
 
-      for (let pair of formData.entries()) {
-        console.log(pair[0], pair[1]);
-      }
-      const response = await axios.put(
+      await axios.put(
         `${BASE_URL}/clients/update-client/${client_id}`,
         formData,
         {
@@ -312,7 +464,6 @@ function ClientProfile() {
           }
         }
       );
-      console.log("Update response:", response.data);
 
       await fetchClient();
 
@@ -325,12 +476,9 @@ function ClientProfile() {
       setShowEdit(false);
 
     } catch (error) {
-      console.error("UPDATE ERROR:", error.response?.data || error.message);
-
-      setPopup({
-        show: true,
-        message: "Update failed",
-        type: "error"
+      setApiError({
+        title: "Unable to Update Client",
+        message: getClientRequestErrorMessage(error, "Update failed."),
       });
     } finally {
       setLoading(false);
@@ -353,20 +501,16 @@ function ClientProfile() {
       formData.append("files", selectedFile);
       formData.append("client_id", client_id);
 
-      for (let pair of formData.entries()) {
-        console.log(pair[0], pair[1]);
-      }
 
-      const response = await axios.post(
+      await axios.post(
         `${BASE_URL}/documents/clients/${client_id}/upload-documents`,
         formData,
         {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`
+            Authorization: `Bearer ${getAccessToken()}`
           }
         }
       );
-      console.log("Upload response:", response.data);
 
       setPopup({
         show: true,
@@ -379,14 +523,9 @@ function ClientProfile() {
       fetchDocuments();
 
     } catch (err) {
-      console.error("Upload error:", err.response?.data || err.message);
-      setPopup({
-        show: true,
-        message:
-          err.response?.data?.detail?.[0]?.msg ||
-          err.response?.data?.detail?.[0] ||
-          "Upload failed",
-        type: "error"
+      setApiError({
+        title: "Document Upload Failed",
+        message: getClientRequestErrorMessage(err, "Document upload failed."),
       });
     } finally {
       setLoading(false);
@@ -395,20 +534,17 @@ function ClientProfile() {
 
   /*view document*/
   const handleView = async (doc) => {
-    console.log("Viewing document:", doc);
     try {
       setLoading(true);
-      console.log("VIEW FILE ID:", doc.file_id);
       const res = await axios.get(
         `${BASE_URL}/documents/files/view`,
         {
           params: { file_id: doc.file_id },
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           },
         }
       );
-      console.log("Document View response received:", res.data);
       const viewUrl = res.data.view_url;
       window.open(viewUrl, "_blank");
       setPopup({
@@ -419,11 +555,9 @@ function ClientProfile() {
       fetchDocuments();
 
     } catch (err) {
-      console.error("View error:", err.response?.data || err.message);
-      setPopup({
-        show: true,
-        message: "Failed to open document",
-        type: "error"
+      setApiError({
+        title: "Unable to Open Document",
+        message: getClientRequestErrorMessage(err, "Failed to open document."),
       });
     } finally {
       setLoading(false);
@@ -432,20 +566,17 @@ function ClientProfile() {
 
   /*download document*/
   const handleDownload = async (doc) => {
-    console.log("Downloading document:", doc);
     try {
       setLoading(true);
-      console.log("DOWNLOAD FILE ID:", doc.file_id);
       const res = await axios.get(
         `${BASE_URL}/documents/files/download`,
         {
           params: { file_id: doc.file_id },
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           },
         }
       );
-      console.log("Download response received:", res.data);
       const downloadUrl = res.data.download_url;
 
       const link = document.createElement("a");
@@ -463,11 +594,9 @@ function ClientProfile() {
       fetchDocuments();
 
     } catch (err) {
-      console.error("Download error:", err.response?.data || err.message);
-      setPopup({
-        show: true,
-        message: "Failed to download document",
-        type: "error"
+      setApiError({
+        title: "Unable to Download Document",
+        message: getClientRequestErrorMessage(err, "Failed to download document."),
       });
     } finally {
       setLoading(false);
@@ -476,9 +605,6 @@ function ClientProfile() {
 
   /*delete document*/
   const handleDelete = (doc) => {
-    console.log("Deleting document:", doc);
-    const gcsPath = doc.url;
-    console.log("DELETE PATH:", gcsPath);
 
     setPopup({
       show: true,
@@ -487,18 +613,17 @@ function ClientProfile() {
       onConfirm: async () => {
         try {
           setLoading(true);
-          const res = await axios.delete(
+          await axios.delete(
             `${BASE_URL}/documents/clients/${client_id}/documents`,
             {
               params: {
                 file_id: doc.file_id
               },
               headers: {
-                Authorization: `Bearer ${localStorage.getItem("token")}`
+                Authorization: `Bearer ${getAccessToken()}`
               }
             }
           );
-          console.log("Delete response:", res.data);
 
           setPopup({
             show: true,
@@ -508,13 +633,9 @@ function ClientProfile() {
           fetchDocuments();
 
         } catch (err) {
-          console.error("Delete error:", err.response?.data);
-          setPopup({
-            show: true,
-            message:
-              err.response?.data?.detail?.[0]?.msg ||
-              "Delete failed",
-            type: "error"
+          setApiError({
+            title: "Unable to Delete Document",
+            message: getClientRequestErrorMessage(err, "Document delete failed."),
           });
         } finally {
           setLoading(false);
@@ -560,7 +681,7 @@ function ClientProfile() {
 
     try {
       setLoading(true);
-      const res = await axios.post(
+      await axios.post(
         `${BASE_URL}/clients/clients/${client_id}/add-source-links`,
         {
           links: [
@@ -572,13 +693,12 @@ function ClientProfile() {
         },
         {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
             "Content-Type": "application/json"
           }
         }
       );
 
-      console.log("Add link response:", res.data);
 
       setPopup({
         show: true,
@@ -592,13 +712,9 @@ function ClientProfile() {
       fetchLinks();
 
     } catch (err) {
-      console.error("FULL ERROR:", err.response?.data);
-      setPopup({
-        show: true,
-        message:
-          err.response?.data?.detail?.[0]?.msg ||
-          "Failed to add link",
-        type: "error"
+      setApiError({
+        title: "Unable to Add Link",
+        message: getClientRequestErrorMessage(err, "Failed to add link."),
       });
     } finally {
       setLoading(false);
@@ -614,7 +730,7 @@ function ClientProfile() {
       onConfirm: async () => {
         try {
           setLoading(true);
-          const res = await axios.delete(
+          await axios.delete(
             `${BASE_URL}/clients/clients/${client_id}/delete-source-link`,
             {
               ...getAuthHeaders(),
@@ -622,7 +738,6 @@ function ClientProfile() {
                 link: linkUrl,
               }
             });
-          console.log("Delete response:", res.data);
           setPopup({
             show: true,
             message: "Link deleted successfully",
@@ -632,11 +747,9 @@ function ClientProfile() {
           fetchLinks();
 
         } catch (err) {
-          console.error("DELETE ERROR:", err.response?.data);
-          setPopup({
-            show: true,
-            message: "Failed to delete link",
-            type: "error"
+          setApiError({
+            title: "Unable to Delete Link",
+            message: getClientRequestErrorMessage(err, "Failed to delete link."),
           });
         } finally {
           setLoading(false);
@@ -677,7 +790,6 @@ function ClientProfile() {
 
   /*add or update profile photo*/
   const handleUploadProfile = async () => {
-    console.log("Uploading profile photo:", profileFile);
     if (!profileFile) {
       setPopup({
         show: true,
@@ -692,27 +804,21 @@ function ClientProfile() {
       const formData = new FormData();
       formData.append("file", profileFile);
 
-      for (let pair of formData.entries()) {
-        console.log(pair[0], pair[1]);
-      }
-      console.log("Uploading profile photo for client ID:", client_id);
 
-      const res = await axios.post(
+      await axios.post(
         `${BASE_URL}/documents/clients/${client_id}/profile-picture`,
         formData,
         {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
+            Authorization: `Bearer ${getAccessToken()}`,
           },
         }
       );
-      console.log("Profile photo upload response:", res.data);
 
       setProfileFile(null);
       setProfilePreview("");
-      fetchProfilePhotoView();
+      await fetchProfilePhotoView();
       setShowPhotoModal(false);
-      fetchProfilePhotoView();
       setPopup({
         show: true,
         message: "Profile photo uploaded successfully",
@@ -720,11 +826,9 @@ function ClientProfile() {
       });
 
     } catch (err) {
-      console.error("Upload error:", err.response?.data);
-      setPopup({
-        show: true,
-        message: "Upload failed",
-        type: "error"
+      setApiError({
+        title: "Profile Photo Upload Failed",
+        message: getClientRequestErrorMessage(err, "Upload failed."),
       });
     } finally {
       setLoading(false);
@@ -733,20 +837,18 @@ function ClientProfile() {
 
   /*delete profile photo*/
   const handleDeleteProfile = async () => {
-    console.log("Deleting profile photo for client ID:", client_id);
     try {
       setLoading(true);
-      console.log("Delete request sent for profile photo:", profileUrl);
-      const res = await axios.delete(
+      await axios.delete(
         `${BASE_URL}/documents/clients/${client_id}/profile-picture`,
         {
           ...getAuthHeaders(),
           params: { gcs_path: profileUrl }
         }
       );
-      console.log("Profile photo delete response:", res.data);
 
       setProfileUrl("");
+      setProfilePhotoError("");
       setPopup({
         show: true,
         message: "Profile photo deleted successfully",
@@ -754,14 +856,11 @@ function ClientProfile() {
       });
 
       setShowPhotoModal(false);
-      fetchProfilePhotoView();
 
     } catch (err) {
-      console.error("Delete error:", err.response?.data);
-      setPopup({
-        show: true,
-        message: "Delete failed",
-        type: "error"
+      setApiError({
+        title: "Profile Photo Delete Failed",
+        message: getClientRequestErrorMessage(err, "Profile photo delete failed."),
       });
     } finally {
       setLoading(false);
@@ -797,28 +896,57 @@ function ClientProfile() {
             {profileImage ? (
               <img
                 src={profileImage}
+                alt="Client profile"
+                onError={() => {
+                  setProfilePhotoError("Unable to display the profile photo.");
+                  if (profileFile) {
+                    setProfileFile(null);
+                    setProfilePreview("");
+                  } else {
+                    setProfileUrl("");
+                  }
+                }}
                 className="w-24 h-24 sm:w-28 sm:h-28 rounded-full object-cover shadow"
               />
             ) : (
               <div
                 className="
                   w-24 h-24 sm:w-28 sm:h-28
-                  rounded-full bg-gray-100 text-black-600
+                  rounded-full bg-gray-100 text-gray-600
                   flex items-center justify-center
                   text-4xl font-bold
                   shadow
                 "
+                aria-label="Client profile photo fallback"
               >
-                {initials}
+                {initials || "?"}
+              </div>
+            )}
+
+            {profilePhotoLoading && (
+              <div className="absolute inset-0 flex items-center justify-center rounded-full bg-white/70" aria-label="Loading profile photo">
+                <FiLoader className="animate-spin text-2xl text-green-800" />
               </div>
             )}
 
             <button
+              type="button"
               onClick={() => setShowPhotoModal(true)}
-              className="absolute bottom-0 right-0 bg-white p-2 rounded-full shadow cursor-pointer"
+              className="absolute bottom-0 right-0 z-10 bg-white p-2 rounded-full shadow cursor-pointer"
+              aria-label="Edit client profile photo"
             >
               {profileUrl ? <FiEdit /> : <FiUpload />}
             </button>
+
+            {profilePhotoError && !profilePhotoLoading && !profileImage && (
+              <button
+                type="button"
+                onClick={fetchProfilePhotoView}
+                className="mt-2 block max-w-[140px] text-xs font-medium text-red-600 underline underline-offset-2"
+              >
+                Photo unavailable. Retry
+              </button>
+            )}
 
           </div>
 
@@ -934,8 +1062,26 @@ function ClientProfile() {
           </button>
         </div>
 
-        {/* DOCUMENTS LIST */}
-        {documents?.length ? (
+        {documentsError && (
+          <div className="p-6 text-gray-500" role="status">
+            <p>{documentsError}</p>
+            <button
+              type="button"
+              onClick={fetchDocuments}
+              disabled={documentsLoading}
+              className="mt-3 rounded-lg bg-green-800 px-4 py-2 text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {documentsLoading ? "Retrying..." : "Try Again"}
+            </button>
+          </div>
+        )}
+
+        {documentsLoading ? (
+          <div className="flex items-center justify-center gap-2 px-6 py-10 text-sm text-gray-500" role="status">
+            <FiLoader className="animate-spin text-lg text-green-800" />
+            Loading documents...
+          </div>
+        ) : documents.length > 0 ? (
           documents.map((doc, i) => {
             const fileName = doc.original_name || "document";
             const fileType = fileName.split(".").pop().toUpperCase();
@@ -988,7 +1134,8 @@ function ClientProfile() {
               </div>
             );
           })
-        ) : (
+
+        ) : documentsError ? null : (
           <p className="p-6 text-gray-400">No documents available</p>
         )}
       </div>
@@ -1018,8 +1165,26 @@ function ClientProfile() {
           </button>
         </div>
 
-        {/* LINKS LIST */}
-        {links?.length ? (
+        {linksError && (
+          <div className="p-6 text-gray-500" role="status">
+            <p>{linksError}</p>
+            <button
+              type="button"
+              onClick={fetchLinks}
+              disabled={linksLoading}
+              className="mt-3 rounded-lg bg-green-800 px-4 py-2 text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {linksLoading ? "Retrying..." : "Try Again"}
+            </button>
+          </div>
+        )}
+
+        {linksLoading ? (
+          <div className="flex items-center justify-center gap-2 px-6 py-10 text-sm text-gray-500" role="status">
+            <FiLoader className="animate-spin text-lg text-green-800" />
+            Loading links...
+          </div>
+        ) : links.length > 0 ? (
           links.map((link, i) => {
             let name = link.link_type || "Untitled";
             let url = link.link || "#";
@@ -1056,7 +1221,8 @@ function ClientProfile() {
               </div>
             );
           })
-        ) : (
+
+        ) : linksError ? null : (
           <p className="p-6 text-gray-400">No links available</p>
         )}
       </div>
@@ -1260,6 +1426,8 @@ function ClientProfile() {
           setPopup={setPopup}
         />
       )}
+
+      {apiErrorModal}
 
       {popup.show && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/40 bg-opacity-40 z-50 px-2">

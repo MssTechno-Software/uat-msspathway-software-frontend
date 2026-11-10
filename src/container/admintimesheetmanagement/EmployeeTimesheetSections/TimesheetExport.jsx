@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { Download } from "lucide-react";
 
 const TimesheetExport = ({
@@ -11,7 +11,11 @@ const TimesheetExport = ({
   monthLabel,
   isFinalized,
 }) => {
+  const [exportError, setExportError] = useState("");
+
   const handleExport = async () => {
+    setExportError("");
+
     try {
       const XLSX = await import("xlsx-js-style");
 
@@ -73,7 +77,7 @@ const TimesheetExport = ({
               weekday: "long",
             })
           : "";
-
+            
         return [
           employee?.name || "",
           employee?.code ||
@@ -931,20 +935,28 @@ const TimesheetExport = ({
       const fileName = `${safeEmployeeName}_${monthValue}_Timesheet.xlsx`;
 
       XLSX.writeFile(workbook, fileName);
-    } catch (error) {
-      console.error("Timesheet export failed:", error);
+    } catch {
+      // Show a clear message when workbook generation or download fails.
+      setExportError("Unable to export the timesheet. Please try again.");
     }
   };
 
   return (
-    <button
-      type="button"
-      onClick={handleExport}
-      className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-    >
-      <Download size={16} />
-      Export CSV
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={handleExport}
+        className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+      >
+        <Download size={16} />
+        Export CSV
+      </button>
+      {exportError && (
+        <p role="alert" className="mt-2 text-sm text-red-600">
+          {exportError}
+        </p>
+      )}
+    </>
   );
 };
 

@@ -11,8 +11,9 @@ import AddEmployee from "./AddEmployee";
 import EmployeeProfile from "./EmployeeProfile";
 import MyProfilePage from "./MyProfilePage";
 import EmployeeTimesheetDetails from "./EmployeeTimesheetDetails";
+import { getUserRole } from "../services/authSession";
 function Dashboard() {
-    const role = localStorage.getItem("role");
+    const role = getUserRole();
     // Block employee users
     if (role === "employee") {
         return <Navigate to="/employee-dashboard" />;

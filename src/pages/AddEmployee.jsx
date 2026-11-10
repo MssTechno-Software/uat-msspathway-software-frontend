@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import {
   FiUser,
   FiMail,
@@ -10,32 +10,45 @@ import {
   FiEyeOff,
   FiMapPin
 } from "react-icons/fi";
+import { API_BASE_URL } from "../api/axios";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
+import { getAccessToken } from "../services/authSession";
 
 function AddEmployee({ onClose, onSave, editingEmployee }) {
   const [showPassword, setShowPassword] = useState(false);
-  const [isCurrentlyWorking, setIsCurrentlyWorking] = useState(false);
-  const [form, setForm] = useState({
-    first_name: "",
-    last_name: "",
-    aadhaar_no: "",
-    email: "",
-    countryCode: "+91",
-    mobile: "",
-    designation: "",
-    startDate: "",
-    endDate: "",
+  const [isCurrentlyWorking, setIsCurrentlyWorking] = useState(
+  () => !!editingEmployee && !editingEmployee.end_date
+);
+
+  const [form, setForm] = useState(() => ({
+    first_name: editingEmployee?.first_name || "",
+    last_name: editingEmployee?.last_name || "",
+    aadhaar_no: editingEmployee?.aadhaar_number || "",
+    email: editingEmployee?.email || "",
+    countryCode: editingEmployee?.mobile?.startsWith("+1") ? "+1" : "+91",
+    mobile: editingEmployee?.mobile
+      ?.replace(/^\+91/, "")
+      ?.replace(/^\+1/, "") || "",
+    designation: editingEmployee?.designation || "",
+    startDate: editingEmployee?.start_date?.split("T")[0] || "",
+    endDate: editingEmployee?.end_date?.split("T")[0] || "",
     photo: "",
     password: "",
-    reporting_to: "",
-    hr: "",
-    role: "Employee",
-    location: ""
-  });
+    reporting_to: editingEmployee?.reporting_to || "",
+    hr: editingEmployee?.HR || "",
+    role: editingEmployee?.role
+      ? editingEmployee.role.charAt(0).toUpperCase() +
+      editingEmployee.role.slice(1).toLowerCase()
+      : "Employee",
+    location: editingEmployee?.location || ""
+  }));
 
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
   const [showReportingDropdown, setShowReportingDropdown] = useState(false);
   const [showHrDropdown, setShowHrDropdown] = useState(false);
   const [employeeIds, setEmployeeIds] = useState([]);
+  const [employeeIdsError, setEmployeeIdsError] = useState("");
+  const [employeeIdsLoading, setEmployeeIdsLoading] = useState(true);
   const [showCountryDropdown, setShowCountryDropdown] = useState(false);
 
   const countryOptions = [
@@ -43,58 +56,65 @@ function AddEmployee({ onClose, onSave, editingEmployee }) {
     { code: "+1", label: "CA" }
   ];
 
-  /* Fetch employee IDs for dropdowns */
-  useEffect(() => {
-    const fetchEmployeeIds = async () => {
-      try {
-        const res = await fetch("https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/employee-ids", {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`
-          }
-        });
-        const data = await res.json();
-        setEmployeeIds(data.data || data);
-      } catch (error) {
-        console.error("Error fetching employee IDs:", error);
-      }
-    };
+  /* Fetch employee IDs for both dropdowns. */
+  const fetchEmployeeIds = useCallback(async () => {
+    setEmployeeIdsLoading(true);
+    setEmployeeIdsError("");
 
-    fetchEmployeeIds();
+    try {
+      const res = await fetch(`${API_BASE_URL.replace(/\/$/, "")}/employee-ids`, {
+        headers: {
+         Authorization: `Bearer ${getAccessToken() || ""}`
+        }
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        if (res.status === 401) {
+          window.dispatchEvent(new Event("session-expired"));
+        }
+
+        const detail = data?.detail;
+        const backendMessage =
+          (typeof detail === "string" && detail.trim()) ||
+          data?.message;
+
+        setEmployeeIds([]);
+        setEmployeeIdsError(
+          backendMessage ||
+          getApiErrorMessage(
+            { response: { status: res.status } },
+            "Unable to load employee IDs. Please try again."
+          )
+        );
+        return;
+      }
+
+      const ids = data?.data || data;
+      if (!Array.isArray(ids)) {
+        throw new Error("Unable to load employee IDs. Please try again.");
+      }
+      setEmployeeIds(ids);
+    } catch (error) {
+      setEmployeeIds([]);
+      setEmployeeIdsError(
+        error?.message === "Failed to fetch"
+          ? getApiErrorMessage(
+              { request: true },
+              "Unable to load employee IDs. Please try again."
+            )
+          : error?.message || "Unable to load employee IDs. Please try again."
+      );
+    } finally {
+      setEmployeeIdsLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    if (editingEmployee) {
-      setForm({
-        first_name: editingEmployee.first_name || "",
-        last_name: editingEmployee.last_name || "",
-        email: editingEmployee.email || "",
-        countryCode:
-          editingEmployee.mobile?.startsWith("+1")
-            ? "+1"
-            : "+91",
+    fetchEmployeeIds();
+  }, [fetchEmployeeIds]);
 
-        mobile:
-          editingEmployee.mobile
-            ?.replace(/^\+91/, "")
-            ?.replace(/^\+1/, "") || "",
-        designation: editingEmployee.designation || "",
-        password: "",
-        reporting_to: editingEmployee.reporting_to || "",
-        hr: editingEmployee.HR || "",
-        aadhaar_no: editingEmployee.aadhaar_number || "",
-        role:
-          editingEmployee.role
-            ? editingEmployee.role.charAt(0).toUpperCase() +
-            editingEmployee.role.slice(1).toLowerCase()
-            : "Employee",
-        startDate: editingEmployee.start_date?.split("T")[0] || "",
-        endDate: editingEmployee.end_date?.split("T")[0] || "",
-        location: editingEmployee.location || ""
-      });
 
-      setIsCurrentlyWorking(!editingEmployee.end_date);
-    }
-  }, [editingEmployee]);
 
   const handleChange = (e) => {
     let { name, value } = e.target;
@@ -191,7 +211,6 @@ function AddEmployee({ onClose, onSave, editingEmployee }) {
       ...form,
       mobile: `${form.countryCode}${form.mobile}`
     };
-    console.log("FORM BEFORE SEND:", form);
     onSave(employeeData);
   };
 
@@ -436,21 +455,41 @@ function AddEmployee({ onClose, onSave, editingEmployee }) {
               </div>
               {showReportingDropdown && (
                 <div className="absolute z-10 mt-2 w-full bg-white border border-gray-200 rounded-xl shadow max-h-52 overflow-y-auto">
-                  {employeeIds.map((tz) => (
-                    <label key={tz} className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer">
-                      <input
-                        type="radio"
-                        checked={form.reporting_to === tz}
-                        onChange={() => {
-                          setForm({ ...form, reporting_to: tz });
-                          setShowReportingDropdown(false);
-                        }
-                        }
-                        className="mr-2 accent-green-700"
-                      />
-                      {tz}
-                    </label>
-                  ))}
+                  {employeeIdsLoading ? (
+                    <p className="px-3 py-3 text-sm text-gray-500">Loading employee IDs...</p>
+                  ) : employeeIdsError ? (
+                    <div className="p-3 space-y-2" role="status">
+                      <p className="text-sm text-red-600">{employeeIdsError}</p>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          fetchEmployeeIds();
+                        }}
+                        disabled={employeeIdsLoading}
+                        className="text-sm font-medium text-green-800 underline underline-offset-2 disabled:opacity-50"
+                      >
+                        Try Again
+                      </button>
+                    </div>
+                  ) : employeeIds.length > 0 ? (
+                    employeeIds.map((tz) => (
+                      <label key={tz} className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer">
+                        <input
+                          type="radio"
+                          checked={form.reporting_to === tz}
+                          onChange={() => {
+                            setForm({ ...form, reporting_to: tz });
+                            setShowReportingDropdown(false);
+                          }}
+                          className="mr-2 accent-green-700"
+                        />
+                        {tz}
+                      </label>
+                    ))
+                  ) : (
+                    <p className="px-3 py-3 text-sm text-gray-500">No employee IDs available.</p>
+                  )}
                 </div>
               )}
             </div>
@@ -476,20 +515,41 @@ function AddEmployee({ onClose, onSave, editingEmployee }) {
               </div>
               {showHrDropdown && (
                 <div className="absolute z-10 mt-2 w-full bg-white border border-gray-200 rounded-xl shadow max-h-52 overflow-y-auto">
-                  {employeeIds.map((tz) => (
-                    <label key={tz} className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer">
-                      <input
-                        type="radio"
-                        checked={form.hr === tz}
-                        onChange={() => {
-                          setForm({ ...form, hr: tz });
-                          setShowHrDropdown(false);
+                  {employeeIdsLoading ? (
+                    <p className="px-3 py-3 text-sm text-gray-500">Loading employee IDs...</p>
+                  ) : employeeIdsError ? (
+                    <div className="p-3 space-y-2" role="status">
+                      <p className="text-sm text-red-600">{employeeIdsError}</p>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          fetchEmployeeIds();
                         }}
-                        className="mr-2 accent-green-700"
-                      />
-                      {tz}
-                    </label>
-                  ))}
+                        disabled={employeeIdsLoading}
+                        className="text-sm font-medium text-green-800 underline underline-offset-2 disabled:opacity-50"
+                      >
+                        Try Again
+                      </button>
+                    </div>
+                  ) : employeeIds.length > 0 ? (
+                    employeeIds.map((tz) => (
+                      <label key={tz} className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer">
+                        <input
+                          type="radio"
+                          checked={form.hr === tz}
+                          onChange={() => {
+                            setForm({ ...form, hr: tz });
+                            setShowHrDropdown(false);
+                          }}
+                          className="mr-2 accent-green-700"
+                        />
+                        {tz}
+                      </label>
+                    ))
+                  ) : (
+                    <p className="px-3 py-3 text-sm text-gray-500">No employee IDs available.</p>
+                  )}
                 </div>
               )}
             </div>

@@ -1,7 +1,37 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FiMail, FiLock, FiEye, FiEyeOff, FiLoader } from "react-icons/fi";
-import axios from "axios";
+import api from "../api/axios";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
+
+import {
+  clearAuthSession,
+  createAuthSession,
+} from "../services/authSession";
+
+
+const getLoginErrorMessage = (error) => {
+  const responseData = error?.response?.data;
+  const detail = responseData?.detail;
+
+  if (typeof responseData === "string" && responseData.trim()) {
+    return responseData;
+  }
+
+  if (typeof detail === "string" && detail.trim()) {
+    return detail;
+  }
+
+  if (Array.isArray(detail) && detail.length > 0) {
+    const detailMessage = detail[0]?.msg || detail[0]?.message;
+    if (detailMessage) return detailMessage;
+  }
+
+  if (responseData?.message) return responseData.message;
+  if (responseData?.error) return responseData.error;
+
+  return getApiErrorMessage(error, "Login failed");
+};
 
 function Login() {
   const [showPopup, setShowPopup] = useState(false);
@@ -47,7 +77,6 @@ function Login() {
 
   // api
   const loginHandler = async (e) => {
-    console.log("Hello", email)
     e.preventDefault();
 
     const isValid = handleSignIn();
@@ -56,21 +85,20 @@ function Login() {
     setLoading(true);
 
     try {
-      const response = await axios.post(
-        "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/auth/login",
+      const response = await api.post(
+        "/auth/login",
         {
           email: email,
           password: password,
         }
       );
 
-      console.log("FULL RESPONSE:", response.data);
+      // Read authentication details from the login response.
+      const clientId =
+        response.data.client_id ||
+        response.data.user?.client_id ||
+        response.data.data?.client_id;
 
-      localStorage.removeItem("token");
-      localStorage.removeItem("user_id");
-      localStorage.removeItem("employee_id");
-
-      // Store token
       const accessToken =
         response.data.access_token ||
         response.data.token ||
@@ -81,83 +109,73 @@ function Login() {
         response.data.refresh_token ||
         response.data.data?.refresh_token;
 
-      if (accessToken) {
-        localStorage.setItem("token", accessToken);
-      }
-
-      if (refreshToken) {
-        localStorage.setItem("refresh_token", refreshToken);
-      }
-
-      // Store user_id
       const userId =
         response.data.user_id ||
         response.data.user?.id ||
         response.data.data?.user_id;
 
-      console.log("User_id:", userId);
-
-      if (userId) {
-        localStorage.setItem("user_id", userId);
-      }
-
-      // Store employee_id (IMPORTANT FIX)
       const empId =
         response.data.employee_id ||
         response.data.user?.employee_id ||
         response.data.data?.employee_id;
 
-      console.log("Saving employee_id:", empId);
-
-      if (empId) {
-        localStorage.setItem("employee_id", empId);
-      } else {
-        console.error("employee_id NOT FOUND in response");
-      }
-
-      // Store role
       const role =
         response.data.role ||
         response.data.user?.role ||
         response.data.data?.role;
 
-      console.log("Role:", role);
+      const formattedRole =
+        typeof role === "string"
+          ? role.toLowerCase().trim()
+          : "";
 
-      if (role) {
-        const formattedRole = role.toLowerCase().trim();
-        console.log("Formatted Role:", formattedRole);
-        localStorage.setItem("role", formattedRole);
+      // Validate the login response before creating a session.
+      if (!accessToken || !formattedRole) {
+        clearAuthSession();
+
+        setErrorMessage(
+          !accessToken
+            ? "Login response is missing the access token."
+            : "Login response is missing the user role."
+        );
+
+        setInvalidPopup(true);
+        return;
       }
 
-      // Navigate after storing
+      // Store authentication details in the current tab's session.
+      try {
+        createAuthSession({
+          accessToken,
+          refreshToken,
+          role: formattedRole,
+          clientId,
+          userId,
+          employeeId: empId,
+        });
+      } catch {
+        clearAuthSession();
+
+        setErrorMessage(
+          "Unable to establish a secure login session. Please try again."
+        );
+
+        setInvalidPopup(true);
+        return;
+      }
+      // Navigate after storing the session.
       setPageLoading(true);
       setTimeout(() => {
-        const formattedRole = role?.toLowerCase()?.trim();
         if (formattedRole === "employee") {
           navigate("/employee-dashboard");
+        } else if (formattedRole === "hr") {
+          navigate("/hr-dashboard");
         } else {
           navigate("/dashboard");
         }
       }, 500);
     } catch (error) {
-      console.log("FULL ERROR:", error);
-      console.log("ERROR RESPONSE:", error?.response);
-      console.log("ERROR DATA:", error?.response?.data);
-
-      let message = "Login failed";
-
-      // Backend response handling
-      if (error.response && error.response.data) {
-        if (typeof error.response.data === "string") {
-          message = error.response.data;
-        } else if (error.response.data.detail) {
-          message = error.response.data.detail;
-        } else if (error.response.data.message) {
-          message = error.response.data.message;
-        }
-      }
-
-      setErrorMessage(message);
+      setErrorMessage(getLoginErrorMessage(error));
       setInvalidPopup(true);
     } finally {
       setLoading(false);
@@ -303,7 +321,6 @@ function Login() {
             <p
               className="text-left text-sm text-green-600 cursor-pointer hover:underline mb-6"
               onClick={() => {
-                console.log("Forgot password clicked");
                 setShowPopup(true)
               }}
             >

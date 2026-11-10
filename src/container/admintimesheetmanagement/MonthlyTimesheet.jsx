@@ -6,10 +6,11 @@ import React, {
 import { FiLoader } from "react-icons/fi";
 import { useNavigate } from "react-router-dom";
 import api from "../../api/axios";
+import { getApiErrorMessage } from "../../utils/apiErrorHandler";
+import ApiErrorModal from "../ApiErrorModal";
+import { getUserRole } from "../../services/authSession";
 
-/* ============================================================
-   DEFAULT DATA
-============================================================ */
+// Default summary
 
 const DEFAULT_SUMMARY = {
     total_employees: 0,
@@ -19,9 +20,7 @@ const DEFAULT_SUMMARY = {
     missing_submissions: 0,
 };
 
-/* ============================================================
-   MONTH FORMAT HELPERS
-============================================================ */
+// Month format helpers
 
 const formatMonth = (date) => {
     const year = date.getFullYear();
@@ -70,24 +69,18 @@ const changeMonth = (
     return formatMonth(date);
 };
 
-/* ============================================================
-   MONTHLY TIMESHEET
-============================================================ */
+// Monthly timesheet
 
 function MonthlyTimesheet() {
     const navigate = useNavigate();
-    /* ==========================================================
-       MONTH
-    ========================================================== */
+    // Selected month
 
     const [month, setMonth] =
         useState(() =>
             formatMonth(new Date())
         );
 
-    /* ==========================================================
-       API DATA
-    ========================================================== */
+    // API data
 
     const [
         employees,
@@ -99,25 +92,17 @@ function MonthlyTimesheet() {
         setSummary,
     ] = useState(DEFAULT_SUMMARY);
 
-    /* ==========================================================
-       UI STATE
-    ========================================================== */
+    // UI state
 
     const [
         loading,
         setLoading,
     ] = useState(false);
 
-    const [
-        error,
-        setError,
-    ] = useState("");
+    const [apiError, setApiError] = useState(null);
+    const [reload, setReload] = useState(0);
 
-
-
-    /* ==========================================================
-       FETCH MONTHLY DASHBOARD
-    ========================================================== */
+    // Load monthly timesheet data
 
     useEffect(() => {
         const controller =
@@ -127,10 +112,8 @@ function MonthlyTimesheet() {
             async () => {
                 try {
                     setLoading(true);
-                    setError("");
 
-                    // API: GET monthly admin dashboard
-                    // Purpose: Load monthly summary and employee timesheet data
+                    // Load the selected month’s summary and employee timesheets.
                     const response =
                         await api.get(
                             "/timesheet/admin/dashboard/monthly",
@@ -146,9 +129,7 @@ function MonthlyTimesheet() {
                     const data =
                         response.data;
 
-                    /* ================================================
-                       SUMMARY
-                    ================================================ */
+                    // Update summary
 
                     const apiSummary =
                         data?.summary || {};
@@ -185,9 +166,7 @@ function MonthlyTimesheet() {
                             ),
                     });
 
-                    /* ================================================
-                       EMPLOYEES
-                    ================================================ */
+                    // Update employee list
 
                     setEmployees(
                         Array.isArray(
@@ -203,20 +182,20 @@ function MonthlyTimesheet() {
                         return;
                     }
 
-                    console.error(
-                        "Monthly Timesheet API Error:",
-                        err
-                    );
+                    if (err?.response?.status === 401 || err?.status === 401) {
+                        setApiError(null);
+                        window.dispatchEvent(new Event("session-expired"));
+                        return;
+                    }
 
-                    const message =
-                        err?.response?.data?.detail ||
-                        `Unable to load monthly timesheet (${err?.response?.status || "unknown"})`;
-
-                    setError(
-                        typeof message === "string"
-                            ? message
-                            : "Unable to load monthly timesheet."
-                    );
+                    setApiError({
+                        title: "Unable to Load Monthly Timesheet",
+                        message: getApiErrorMessage(
+                            err,
+                            "Unable to load monthly timesheet. Please try again."
+                        ),
+                        onRetry: () => setReload((current) => current + 1),
+                    });
 
                     setEmployees([]);
 
@@ -237,20 +216,16 @@ function MonthlyTimesheet() {
         return () => {
             controller.abort();
         };
-    }, [month]);
+    }, [month, reload]);
 
-    /* ==========================================================
-       CURRENT MONTH
-    ========================================================== */
+    // Current month button
 
     const currentMonth = useMemo(
         () => formatMonth(new Date()),
         []
     );
 
-    /* ==========================================================
-       MONTH NAVIGATION
-    ========================================================== */
+    // Month navigation
 
     const handlePreviousMonth =
         () => {
@@ -277,22 +252,24 @@ function MonthlyTimesheet() {
             setMonth(currentMonth);
         };
 
-    /* ==========================================================
-       STATUS
-    ========================================================== */
-    const getStatusClass = (
-        status
-    ) => {
-        const normalized =
-            String(status || "")
-                .toLowerCase()
-                .replace(/\s+/g, "_");
+    // Status styles
+    const getStatusClass = (status) => {
+        const normalized = String(status || "")
+            .toLowerCase()
+            .replace(/\s+/g, "_");
 
-        if (
-            normalized === "finalized"
-        ) {
+        // Finalized status
+        if (normalized === "finalized") {
             return `
             bg-[#4D8B4F]
+            text-white
+        `;
+        }
+
+        // Completed status
+        if (normalized === "completed") {
+            return `
+            bg-[#2563EB]
             text-white
         `;
         }
@@ -313,66 +290,47 @@ function MonthlyTimesheet() {
     `;
     };
 
-    /* ==========================================================
-       RENDER
-    ========================================================== */
+    // Render monthly timesheet
 
     return (
         <>
-          {loading && (
-            <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40">
-                <div className="flex flex-col items-center gap-3 p-6">
-                    <FiLoader className="animate-spin text-4xl text-green-700" />
+            {apiError && (
+                <ApiErrorModal
+                    title={apiError.title}
+                    message={apiError.message}
+                    onRetry={() => {
+                        const retry = apiError.onRetry;
+                        setApiError(null);
+                        retry?.();
+                    }}
+                    onClose={() => setApiError(null)}
+                />
+            )}
+            {loading && (
+                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40">
+                    <div className="flex flex-col items-center gap-3 p-6">
+                        <FiLoader className="animate-spin text-4xl text-green-700" />
 
-                    <p className="font-medium text-gray-700">
-                        Please wait...
-                    </p>
+                        <p className="font-medium text-gray-700">
+                            Please wait...
+                        </p>
+                    </div>
                 </div>
-            </div>
-        )}
+            )}
             <div
-                className="
-                    min-h-full
-                    w-full
-                    min-w-0
-                    bg-transparent
-                    px-3
-                    pt-0
-                    pb-6
-                    sm:px-6
-                    lg:px-8
-                "
+                className="min-h-full w-full min-w-0 bg-transparent px-3 pt-0 pb-6 sm:px-6 lg:px-8"
             >
-                {/* ======================================================
-                    MONTH HEADER
-                ====================================================== */}
+                {/* Month header */}
 
                 <div
-                    className="
-                        mb-7
-                        flex
-                        flex-wrap
-                        items-center
-                        justify-end
-                        gap-2
-                        -mt-[20px]
-                        sm:gap-4
-                        sm:-mt-[38px]
-                    "
+                    className="mb-7 flex flex-wrap items-center justify-end gap-2 -mt-[20px] sm:gap-4 sm:-mt-[38px]"
                 >
-                    {/* MONTH NAVIGATION */}
+                    {/* Month Navigation */}
 
                     <div
-                        className="
-                            flex
-                            flex-wrap
-                            items-center
-                            justify-end
-                            gap-1.5
-                            sm:gap-3
-                        "
+                        className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-3"
                     >
-                        {/* PREVIOUS MONTH */}
+                        {/* Previous Month */}
 
                         <button
                             type="button"
@@ -380,29 +338,13 @@ function MonthlyTimesheet() {
                                 handlePreviousMonth
                             }
                             disabled={loading}
-                            className="
-                                flex
-                                h-8
-                                w-8
-                                shrink-0
-                                items-center
-                                justify-center
-                                sm:h-9
-                                sm:w-9
-                                rounded-md
-                                text-lg
-                                text-[#0b1b35]
-                                transition
-                                hover:bg-white
-                                disabled:cursor-not-allowed
-                                disabled:opacity-50
-                            "
+                            className="flex h-8 w-8 shrink-0 items-center justify-center sm:h-9 sm:w-9 rounded-md text-lg text-[#0b1b35] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
                             aria-label="Previous month"
                         >
                             ‹
                         </button>
 
-                        {/* MONTH SELECT */}
+                        {/* Month Select */}
 
                         <select
                             value={month}
@@ -412,25 +354,7 @@ function MonthlyTimesheet() {
                                 )
                             }
                             disabled={loading}
-                            className="
-                                h-8
-                                w-[132px]
-                                min-w-0
-                                rounded-md
-                                cursor-pointer
-                                border
-                                sm:h-9
-                                sm:w-auto
-                                sm:min-w-[130px]
-                                border-[#ddd6d1]
-                                bg-white
-                                px-3
-                                text-[13px]
-                                font-medium
-                                text-[#0b1b35]
-                                outline-none
-                                focus:border-[#6b2d1a]
-                            "
+                            className="h-8 w-[132px] min-w-0 rounded-md cursor-pointer border sm:h-9 sm:w-auto sm:min-w-[130px] border-[#ddd6d1] bg-white px-3 text-[13px] font-medium text-[#0b1b35] outline-none focus:border-[#6b2d1a]"
                         >
                             {Array.from(
                                 { length: 13 },
@@ -465,7 +389,7 @@ function MonthlyTimesheet() {
                             )}
                         </select>
 
-                        {/* NEXT MONTH */}
+                        {/* Next Month */}
 
                         <button
                             type="button"
@@ -473,30 +397,14 @@ function MonthlyTimesheet() {
                                 handleNextMonth
                             }
                             disabled={loading}
-                            className="
-                                flex
-                                h-8
-                                w-8
-                                shrink-0
-                                items-center
-                                justify-center
-                                sm:h-9
-                                sm:w-9
-                                rounded-md
-                                text-lg
-                                text-[#0b1b35]
-                                transition
-                                hover:bg-white
-                                disabled:cursor-not-allowed
-                                disabled:opacity-50
-                            "
+                            className="flex h-8 w-8 shrink-0 items-center justify-center sm:h-9 sm:w-9 rounded-md text-lg text-[#0b1b35] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
                             aria-label="Next month"
                         >
                             ›
                         </button>
                     </div>
 
-                    {/* CURRENT MONTH */}
+                    {/* Current Month */}
 
                     {month !== currentMonth && (
                         <button
@@ -504,62 +412,17 @@ function MonthlyTimesheet() {
                             onClick={
                                 handleCurrentMonth
                             }
-                            className="
-                                rounded-md
-                                border
-                                border-[#ddd6d1]
-                                bg-white
-                                px-3
-                                py-2
-                                sm:px-4
-                                text-[12px]
-                                font-medium
-                                text-[#6b2d1a]
-                                transition
-                                hover:bg-[#faf7f5]
-                            "
+                            className="rounded-md border border-[#ddd6d1] bg-white px-3 py-2 sm:px-4 text-[12px] font-medium text-[#6b2d1a] transition hover:bg-[#faf7f5]"
                         >
                             Current Month
                         </button>
                     )}
                 </div>
 
-                {/* ======================================================
-                    ERROR
-                ====================================================== */}
-
-                {error && (
-                    <div
-                        className="
-                            mb-5
-                            rounded-md
-                            border
-                            border-red-200
-                            bg-red-50
-                            px-4
-                            py-3
-                            text-sm
-                            text-red-700
-                        "
-                    >
-                        {error}
-                    </div>
-                )}
-
-                {/* ======================================================
-                    SUMMARY CARDS
-                ====================================================== */}
+                {/* Summary cards */}
 
                 <div
-                    className="
-                        mb-8
-                        grid
-                        w-full
-                        grid-cols-1
-                        gap-4
-                        sm:grid-cols-2
-                        xl:grid-cols-4
-                    "
+                    className="mb-8 grid w-full grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
                 >
                     <SummaryCard
                         icon="👤︎"
@@ -626,141 +489,61 @@ function MonthlyTimesheet() {
                     />
                 </div>
 
-                {/* ======================================================
-                    TABLE
-                ====================================================== */}
+                {/* Employee timesheet table */}
 
                 <div
-                    className="
-                        w-full
-                        min-w-0
-                        overflow-x-auto
-                        overscroll-x-contain
-                        touch-pan-x
-                        rounded-md
-                        border
-                        border-[#e5d6ce]
-                        bg-white
-                    "
+                    className="w-full min-w-0 overflow-x-auto overscroll-x-contain touch-pan-x rounded-md border border-[#e5d6ce] bg-white"
                 >
                     <table
-                        className="
-                            w-full
-                            min-w-[850px]
-                            table-fixed
-                            border-collapse
-                        "
+                        className="w-full min-w-[850px] table-fixed border-collapse"
                     >
-                        {/* HEADER */}
+                        {/* Header */}
 
                         <thead
-                            className="
-        sticky
-        top-0
-        z-10
-    "
+                            className="sticky top-0 z-10"
                         >
                             <tr
-                                className="
-            h-[62px]
-            bg-[#eef3fd]
-        "
+                                className="h-[62px] bg-[#eef3fd]"
                             >
                                 <th
-                                    className="
-                w-[230px]
-                min-w-[230px]
-                whitespace-nowrap
-                border-b
-                border-[#d9dce4]
-                px-5
-                text-left
-                text-[11px]
-                font-semibold
-                text-[#17243b]
-            "
+                                    className="w-[230px] min-w-[230px] whitespace-nowrap border-b border-[#d9dce4] px-5 text-left text-[11px] font-semibold text-[#17243b]"
                                 >
                                     EMPLOYEE
                                 </th>
 
                                 <th
-                                    className="
-                whitespace-nowrap
-                border-b
-                border-[#d9dce4]
-                px-2
-                text-left
-                text-[11px]
-                font-semibold
-                text-[#17243b]
-            "
+                                    className="whitespace-nowrap border-b border-[#d9dce4] px-2 text-left text-[11px] font-semibold text-[#17243b]"
                                 >
                                     WORKED HOURS
                                 </th>
 
                                 <th
-                                    className="
-                whitespace-nowrap
-                border-b
-                border-[#d9dce4]
-                px-2
-                text-left
-                text-[11px]
-                font-semibold
-                text-[#17243b]
-            "
+                                    className="whitespace-nowrap border-b border-[#d9dce4] px-2 text-left text-[11px] font-semibold text-[#17243b]"
                                 >
                                     LEAVE DAYS
                                 </th>
 
                                 <th
-                                    className="
-                whitespace-nowrap
-                border-b
-                border-[#d9dce4]
-                px-2
-                text-left
-                text-[11px]
-                font-semibold
-                text-[#17243b]
-            "
+                                    className="whitespace-nowrap border-b border-[#d9dce4] px-2 text-left text-[11px] font-semibold text-[#17243b]"
                                 >
                                     APPROVED WEEKS
                                 </th>
 
                                 <th
-                                    className="
-                whitespace-nowrap
-                border-b
-                border-[#d9dce4]
-                px-2
-                text-left
-                text-[11px]
-                font-semibold
-                text-[#17243b]
-            "
+                                    className="whitespace-nowrap border-b border-[#d9dce4] px-2 text-left text-[11px] font-semibold text-[#17243b]"
                                 >
                                     MISSING DATES
                                 </th>
 
                                 <th
-                                    className="
-                whitespace-nowrap
-                border-b
-                border-[#d9dce4]
-                px-8
-                text-left
-                text-[11px]
-                font-semibold
-                text-[#17243b]
-            "
+                                    className="whitespace-nowrap border-b border-[#d9dce4] px-8 text-left text-[11px] font-semibold text-[#17243b]"
                                 >
                                     STATUS
                                 </th>
                             </tr>
                         </thead>
 
-                        {/* BODY */}
+                        {/* Body */}
 
                         <tbody>
                             {loading ? (
@@ -779,19 +562,12 @@ function MonthlyTimesheet() {
                                                 getStatusClass
                                             }
                                             onProfileClick={() => {
-                                                const role = localStorage
-                                                    .getItem("role")
-                                                    ?.toLowerCase()
-                                                    ?.trim();
+                                                const role = getUserRole();
 
                                                 if (role === "super admin") {
-                                                    navigate(
-                                                        `/dashboard/work-approval/timesheet/employee/${employee.employee_code}?month=${month}&view=monthly`
-                                                    );
+                                                    navigate(`/super-admin-dashboard/work-approval/timesheet/employee/${employee.employee_code}?month=${month}&view=monthly`);
                                                 } else {
-                                                    navigate(
-                                                        `/super-admin-dashboard/work-approval/timesheet/employee/${employee.employee_code}?month=${month}&view=monthly`
-                                                    );
+                                                    navigate(`/dashboard/work-approval/timesheet/employee/${employee.employee_code}?month=${month}&view=monthly`);
                                                 }
                                             }}
                                         />
@@ -801,13 +577,7 @@ function MonthlyTimesheet() {
                                 <tr>
                                     <td
                                         colSpan={6}
-                                        className="
-                                            px-5
-                                            py-12
-                                            text-center
-                                            text-sm
-                                            text-slate-500
-                                        "
+                                        className="px-5 py-12 text-center text-sm text-slate-500"
                                     >
                                         No employee data
                                         available for{" "}
@@ -822,14 +592,11 @@ function MonthlyTimesheet() {
                 </div>
             </div>
 
-
         </>
     );
 }
 
-/* ============================================================
-   SUMMARY CARD
-============================================================ */
+// Summary card
 
 function SummaryCard({
     icon,
@@ -840,71 +607,28 @@ function SummaryCard({
 }) {
     return (
         <div
-            className="
-                group
-                w-full
-                min-w-0
-                max-w-full
-                rounded-md
-                border
-                border-[#e5d6ce]
-                bg-white
-                px-6
-                py-5
-                transition-all
-                duration-300
-                ease-out
-                hover:-translate-y-1
-                hover:scale-[1.02]
-                hover:shadow-[0_14px_30px_rgba(77,139,79,0.14)]
-                motion-reduce:transition-none
-                motion-reduce:hover:transform-none
-            "
+            className="group w-full min-w-0 max-w-full rounded-md border border-[#e5d6ce] bg-white px-6 py-5 transition-all duration-300 ease-out hover:-translate-y-1 hover:scale-[1.02] hover:shadow-[0_14px_30px_rgba(77,139,79,0.14)] motion-reduce:transition-none motion-reduce:hover:transform-none"
         >
             <div
-                className="
-                    mb-5
-                    flex
-                    h-9
-                    w-9
-                    items-center
-                    justify-center
-                    bg-[#eef3fa]
-                    text-[17px]
-                    text-[#006b3c]
-                "
+                className="mb-5 flex h-9 w-9 items-center justify-center bg-[#eef3fa] text-[17px] text-[#006b3c]"
             >
                 {icon}
             </div>
 
             <div
-                className="
-                    text-[11px]
-                    font-medium
-                    text-[#17243b]
-                "
+                className="text-[11px] font-medium text-[#17243b]"
             >
                 {title}
             </div>
 
             <div
-                className="
-                    mt-2
-                    text-[20px]
-                    font-medium
-                    text-[#0b1b35]
-                "
+                className="mt-2 text-[20px] font-medium text-[#0b1b35]"
             >
                 {value}
             </div>
 
             <div
-                className={`
-                    mt-6
-                    text-[12px]
-                    font-medium
-                    ${footerClass}
-                `}
+                className={`mt-6 text-[12px] font-medium ${footerClass}`}
             >
                 {footer}
             </div>
@@ -912,9 +636,7 @@ function SummaryCard({
     );
 }
 
-/* ============================================================
-   EMPLOYEE ROW
-============================================================ */
+// Employee row
 
 function EmployeeRow({
     employee,
@@ -924,9 +646,7 @@ function EmployeeRow({
     const avatarUrl =
         employee?.avatar_url;
 
-    /* ==========================================================
-       AVATAR FALLBACK
-    ========================================================== */
+    // Show initials if avatar fails to load
 
     const [avatarError, setAvatarError] =
         useState(false);
@@ -953,32 +673,18 @@ function EmployeeRow({
 
     return (
         <tr
-            className="
-                border-b
-                border-[#e5d6ce]
-                last:border-b-0
-                hover:bg-[#fafbfc]
-            "
+            className="border-b border-[#e5d6ce] last:border-b-0 hover:bg-[#fafbfc]"
         >
-            {/* EMPLOYEE */}
+            {/* Employee */}
 
             <td className="px-4 py-4 sm:px-5">
                 <button
                     type="button"
                     onClick={onProfileClick}
-                    className="
-                        flex
-                        min-w-0
-                        items-center
-                        gap-2
-                        text-left
-                        sm:gap-3
-                        outline-none
-                        cursor-pointer
-                    "
+                    className="flex min-w-0 items-center gap-2 text-left sm:gap-3 outline-none cursor-pointer"
                     aria-label={`Open ${employeeName} summary`}
                 >
-                    {/* PROFILE / INITIALS */}
+                    {/* Profile / Initials */}
                     {avatarUrl &&
                         !avatarError ? (
                         <img
@@ -992,13 +698,7 @@ function EmployeeRow({
                             alt={
                                 employeeName
                             }
-                            className="
-                                h-10
-                                w-10
-                                shrink-0
-                                rounded-full
-                                object-cover
-                            "
+                            className="h-10 w-10 shrink-0 rounded-full object-cover"
                             onError={() => {
                                 setAvatarError(
                                     true
@@ -1007,50 +707,25 @@ function EmployeeRow({
                         />
                     ) : (
                         <div
-                            className="
-                                flex
-                                h-10
-                                w-10
-                                shrink-0
-                                items-center
-                                justify-center
-                                rounded-full
-                                bg-[#f1f4f8]
-                                min-w-0
-                                truncate
-                                text-[13px]
-                                font-semibold
-                                text-[#0b1b35]
-                            "
+                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#f1f4f8] min-w-0 truncate text-[13px] font-semibold text-[#0b1b35]"
                         >
                             {initials}
                         </div>
                     )}
 
                     <div>
-                        {/* EMPLOYEE NAME */}
+                        {/* Employee Name */}
 
                         <div
-                            className="
-                                min-w-0
-                                truncate
-                                text-[13px]
-                                font-semibold
-                                text-[#0b1b35]
-                            "
+                            className="min-w-0 truncate text-[13px] font-semibold text-[#0b1b35]"
                         >
                             {employeeName}
                         </div>
 
-                        {/* EMPLOYEE CODE */}
+                        {/* Employee Code */}
 
                         <div
-                            className="
-                                mt-0.5
-                                truncate
-                                text-[11px]
-                                text-slate-500
-                            "
+                            className="mt-0.5 truncate text-[11px] text-slate-500"
                         >
                             {employee?.employee_code}
                         </div>
@@ -1058,16 +733,10 @@ function EmployeeRow({
                 </button>
             </td>
 
-            {/* WORKED HOURS */}
+            {/* Worked Hours */}
 
             <td
-                className="
-                    px-3
-                    py-4
-                    text-[13px]
-                    sm:px-4
-                    text-[#17243b]
-                "
+                className="px-3 py-4 text-[13px] sm:px-4 text-[#17243b]"
             >
                 {Number(
                     employee?.worked_hours ||
@@ -1076,16 +745,10 @@ function EmployeeRow({
                 h
             </td>
 
-            {/* LEAVE DAYS */}
+            {/* Leave Days */}
 
             <td
-                className="
-                    px-3
-                    py-4
-                    text-[13px]
-                    sm:px-4
-                    text-[#17243b]
-                "
+                className="px-3 py-4 text-[13px] sm:px-4 text-[#17243b]"
             >
                 {Number(
                     employee?.leave_days ||
@@ -1093,37 +756,19 @@ function EmployeeRow({
                 )}
             </td>
 
-            {/* APPROVED WEEKS */}
+            {/* Approved Weeks */}
 
             <td
-                className="
-                    px-3
-                    py-4
-                    text-[13px]
-                    sm:px-4
-                    text-[#17243b]
-                "
+                className="px-3 py-4 text-[13px] sm:px-4 text-[#17243b]"
             >
                 {employee?.approved_weeks ||
                     "0/0"}
             </td>
 
-            {/* MISSING DATES */}
+            {/* Missing Dates */}
 
             <td
-                className={`
-                    px-3
-                    py-4
-                    text-[13px]
-                    sm:px-4
-                    ${Number(
-                    employee?.missing_dates ||
-                    0
-                ) > 0
-                        ? "text-[#d33b3b]"
-                        : "text-slate-600"
-                    }
-                `}
+                className={`px-3 py-4 text-[13px] sm:px-4 ${Number(employee?.missing_dates || 0) > 0 ? "text-[#d33b3b]" : "text-slate-600"}`}
             >
                 {Number(
                     employee?.missing_dates ||
@@ -1133,27 +778,11 @@ function EmployeeRow({
                     : "None"}
             </td>
 
-            {/* STATUS */}
+            {/* Status */}
 
             <td className="min-w-[100px] whitespace-nowrap px-3 py-4 sm:px-4">
                 <span
-                    className={`
-                        inline-flex
-                        shrink-0
-                        items-center
-                        justify-center
-                        whitespace-nowrap
-                        rounded-full
-                        px-2.5
-                        py-1
-                        text-[9px]
-                        leading-tight
-                        font-semibold
-                        sm:px-3
-                        sm:text-[11px]
-                        ${status === "Finalized" ? "ml-0 sm:ml-4" : ""}
-                        ${getStatusClass(status)}
-                    `}
+                    className={`inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-full px-2.5 py-1 text-[9px] leading-tight font-semibold sm:px-3 sm:text-[11px] ${["Finalized", "Completed"].includes(status) ? "ml-0 sm:ml-4" : ""} ${getStatusClass(status)}`}
                 >
                     {status}
                 </span>
@@ -1162,9 +791,7 @@ function EmployeeRow({
     );
 }
 
-/* ============================================================
-   LOADING ROWS
-============================================================ */
+// Loading rows
 
 function LoadingRows() {
     return (
@@ -1187,40 +814,17 @@ function LoadingRows() {
                 (row) => (
                     <tr
                         key={row}
-                        className="
-                            border-b
-                            border-[#e5d6ce]
-                        "
+                        className="border-b border-[#e5d6ce]"
                     >
                         <td
                             colSpan={6}
-                            className="
-                                px-5
-                                py-5
-                            "
+                            className="px-5 py-5"
                         >
                             <div
-                                className="
-                                    relative
-                                    h-5
-                                    w-full
-                                    overflow-hidden
-                                    rounded
-                                    bg-[#eef1f5]
-                                "
+                                className="relative h-5 w-full overflow-hidden rounded bg-[#eef1f5]"
                             >
                                 <div
-                                    className="
-                                        absolute
-                                        inset-y-0
-                                        -left-[40%]
-                                        w-[40%]
-                                        bg-gradient-to-r
-                                        from-transparent
-                                        via-white/70
-                                        to-transparent
-                                        animate-[tableShimmer_1.4s_linear_infinite]
-                                    "
+                                    className="absolute inset-y-0 -left-[40%] w-[40%] bg-gradient-to-r from-transparent via-white/70 to-transparent animate-[tableShimmer_1.4s_linear_infinite]"
                                 />
                             </div>
                         </td>

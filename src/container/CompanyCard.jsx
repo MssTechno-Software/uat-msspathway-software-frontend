@@ -16,14 +16,6 @@ function CompanyCard({ data, onEdit, onDelete }) {
     const assignmentStage = stageData.find(
         (item) => item.stage === "Assignment"
     );
-
-    const latestStage =
-        stageData.length > 0
-            ? [...stageData].sort(
-                (a, b) => new Date(b.date) - new Date(a.date)
-            )[0]
-            : null;
-
     const getStatusColor = (status) => {
         if (status === "Cleared") return "bg-green-100 text-green-700";
         if (status === "Pending") return "bg-yellow-100 text-yellow-700";

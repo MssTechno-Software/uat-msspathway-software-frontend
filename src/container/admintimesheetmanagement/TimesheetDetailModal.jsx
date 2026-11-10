@@ -1,6 +1,8 @@
-import React, { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { LockKeyhole } from "lucide-react";
 import api from "../../api/axios";
+import { getApiErrorMessage } from "../../utils/apiErrorHandler";
+import ApiErrorModal from "../ApiErrorModal";
 
 // Dynamic API base URL from the centralized Axios configuration.
 const API_BASE_URL = api.defaults.baseURL || import.meta.env.VITE_API_BASE_URL || "";
@@ -185,9 +187,6 @@ function TimesheetDetailModal({
     const [actionLoading, setActionLoading] =
         useState(false);
 
-    const [actionMessage, setActionMessage] =
-        useState("");
-
     const [showSuccessPopup, setShowSuccessPopup] =
         useState(false);
 
@@ -195,9 +194,35 @@ function TimesheetDetailModal({
         useState("");
     const [actionError, setActionError] =
         useState("");
+    const [apiError, setApiError] = useState(null);
+
+    // Use the shared error handler and preserve the existing session-expiry flow.
+    const handleApiError = (error, title, fallbackMessage) => {
+        if (error?.response?.status === 401) {
+            window.dispatchEvent(new Event("session-expired"));
+            return;
+        }
+
+        const isApiClientError = Boolean(
+            error?.response ||
+            error?.request ||
+            error?.code ||
+            error?.isAxiosError
+        );
+        const message = isApiClientError
+            ? getApiErrorMessage(error, fallbackMessage)
+            : error?.message || fallbackMessage;
+
+        setApiError({ title, message });
+    };
 
     const [actionStatus, setActionStatus] =
         useState("");
+    const actionStatusRef = useRef(actionStatus);
+
+    useEffect(() => {
+        actionStatusRef.current = actionStatus;
+    }, [actionStatus]);
 
     const [actionType, setActionType] =
         useState("");
@@ -257,17 +282,19 @@ function TimesheetDetailModal({
 
         // Preserve the locally saved/actioned status so a parent refresh
         // cannot temporarily overwrite the status shown in this popup.
+        const currentActionStatus = actionStatusRef.current;
+
         const preservedActionStatus = [
             "submitted",
             "approved",
             "rejected",
-        ].includes(actionStatus);
+        ].includes(currentActionStatus);
 
         const syncedDetails =
             preservedActionStatus
                 ? {
                     ...(details || {}),
-                    status: actionStatus,
+                    status: currentActionStatus,
                 }
                 : details || null;
 
@@ -283,14 +310,13 @@ function TimesheetDetailModal({
         );
 
         if (preservedActionStatus) {
-            setActionStatus(actionStatus);
+            setActionStatus(currentActionStatus);
         } else if (["submitted", "approved", "rejected"].includes(incomingStatus)) {
             setActionStatus(incomingStatus);
         } else {
             setActionStatus("");
         }
         setActionType("");
-        setActionMessage("");
         setShowSuccessPopup(false);
         setSuccessPopupType("");
         setActionError("");
@@ -299,16 +325,6 @@ function TimesheetDetailModal({
         setPendingRejectDayEntryId(null);
         setPendingRejectDetails(null);
     }, [details]);
-
-    // Extract timesheet details from the API response.
-    const extractDayDetails = (data) =>
-        data?.data ||
-        data?.timesheet ||
-        (data?.detail &&
-            typeof data.detail === "object" &&
-            !Array.isArray(data.detail)
-            ? data.detail
-            : data);
 
     // Update one editable timesheet field.
     const updateEditableField = (field, value) => {
@@ -730,7 +746,6 @@ function TimesheetDetailModal({
             setTimeValidationErrors({});
             setProjectFieldErrors({});
             setActionError("");
-            setActionMessage("");
             setMissingDaySubmitted(false);
             setIsEditing(true);
             return;
@@ -758,7 +773,6 @@ function TimesheetDetailModal({
         setTimeValidationErrors({});
         setProjectFieldErrors({});
         setActionError("");
-        setActionMessage("");
         setIsEditing(true);
     };
 
@@ -837,8 +851,6 @@ function TimesheetDetailModal({
         setSaveLoading(true);
         setEditError("");
         setActionError("");
-        setActionMessage("");
-
         try {
 
 
@@ -917,11 +929,6 @@ function TimesheetDetailModal({
                         employeeCode
                     )}/day/admin-submit`;
 
-                console.log(
-                    "[MISSING DAY ADMIN SUBMIT] POST",
-                    `${API_BASE_URL}${adminSubmitUrl}`,
-                    adminSubmitPayload
-                );
 
                 const response = await api.post(
                     adminSubmitUrl,
@@ -999,7 +1006,6 @@ function TimesheetDetailModal({
                     setPendingRejectDetails(pendingDetails);
                     setRejectReason("");
                     setActionError("");
-                    setActionMessage("");
                     setShowRejectPopup(true);
                     setIsEditing(false);
                     setEditError("");
@@ -1023,7 +1029,6 @@ function TimesheetDetailModal({
                 setEditError("");
                 setTimeValidationErrors({});
                 setProjectFieldErrors({});
-                setActionMessage("");
                 setSuccessPopupType("saved");
                 setShowSuccessPopup(true);
 
@@ -1050,42 +1055,16 @@ function TimesheetDetailModal({
 
             // API: PUT /timesheet/admin/timesheet/day/:dayEntryId
             // Purpose: Update an existing timesheet day entry.
-            console.log(
-                "[TIMESHEET SAVE] PUT",
-                `${API_BASE_URL}/timesheet/admin/timesheet/day/${dayEntryId}`,
+
+            const response = await api.put(
+                `/timesheet/admin/timesheet/day/${encodeURIComponent(
+                    dayEntryId
+                )}`,
                 payload
             );
 
-            let response;
-
-            try {
-                response = await api.put(
-                    `/timesheet/admin/timesheet/day/${encodeURIComponent(
-                        dayEntryId
-                    )}`,
-                    payload
-                );
-            } catch (error) {
-                const data = error?.response?.data;
-                const status = error?.response?.status;
-
-                let message =
-                    `Unable to update timesheet (${status || "unknown"})`;
-
-                if (typeof data?.detail === "string") {
-                    message = data.detail;
-                } else if (Array.isArray(data?.detail)) {
-                    message = data.detail
-                        .map((item) => item?.msg || item)
-                        .join(", ");
-                }
-
-                throw new Error(message);
-            }
-
             const data = response.data;
 
-            console.log("[TIMESHEET SAVE] RESPONSE", response.status, data);
 
             const submittedDetails = {
                 ...(editableDetails || {}),
@@ -1148,7 +1127,6 @@ function TimesheetDetailModal({
             skipNextDetailsSyncRef.current = true;
             setEditableDetails(updatedDetails);
             setIsEditing(false);
-            setActionMessage("");
             setSuccessPopupType("saved");
             setShowSuccessPopup(true);
 
@@ -1160,105 +1138,7 @@ function TimesheetDetailModal({
             try {
                 // API: GET /timesheet/admin/timesheet/day/:dayEntryId
                 // Purpose: Verify that the saved timesheet is persisted in the backend.
-                let verifyResponse;
-
-                try {
-                    verifyResponse = await api.get(
-                        `/timesheet/admin/timesheet/day/${encodeURIComponent(
-                            dayEntryId
-                        )}`,
-                        {
-                            params: { _ts: Date.now() },
-                            headers: { "Cache-Control": "no-cache" },
-                        }
-                    );
-                } catch (verifyError) {
-                    throw new Error(
-                        `Unable to verify saved timesheet (${verifyError?.response?.status || "unknown"})`
-                    );
-                }
-
-                const verifiedData = verifyResponse.data;
-
-                const verifiedDetails =
-                    verifiedData?.data ||
-                    verifiedData?.timesheet ||
-                    (verifiedData?.detail &&
-                        typeof verifiedData.detail === "object" &&
-                        !Array.isArray(verifiedData.detail)
-                        ? verifiedData.detail
-                        : verifiedData);
-
-                if (
-                    verifiedDetails &&
-                    typeof verifiedDetails === "object" &&
-                    !Array.isArray(verifiedDetails)
-                ) {
-                    const verifiedHours = Number(
-                        verifiedDetails?.total_hours
-                    );
-                    const submittedHours = Number(
-                        updatedDetails?.total_hours
-                    );
-
-                    const hoursMismatch =
-                        Number.isFinite(verifiedHours) &&
-                        Number.isFinite(submittedHours) &&
-                        verifiedHours !== submittedHours;
-
-                    if (hoursMismatch) {
-                        console.warn(
-                            "[TIMESHEET SAVE] Backend GET returned different total_hours after PUT.",
-                            {
-                                submitted: submittedHours,
-                                backend: verifiedHours,
-                                dayEntryId,
-                            }
-                        );
-                    } else {
-                        console.log(
-                            "[TIMESHEET SAVE] Persistence verification passed.",
-                            verifiedDetails
-                        );
-                    }
-                }
-
-                skipNextDetailsSyncRef.current = true;
-                setEditableDetails(updatedDetails);
-            } catch (verifyError) {
-                console.error(
-                    "[TIMESHEET SAVE] Persistence verification error:",
-                    verifyError
-                );
-
-                skipNextDetailsSyncRef.current = true;
-                setEditableDetails(updatedDetails);
-            }
-
-        } catch (err) {
-            console.error(
-                "Timesheet Update Error:",
-                err
-            );
-
-            setEditError(
-                err?.message ||
-                "Unable to update timesheet."
-            );
-        } finally {
-            setSaveLoading(false);
-        }
-    };
-
-    // Refresh the latest day details after an action.
-    const refreshDayAfterAction = async (fallbackDetails) => {
-        try {
-            // API: GET /timesheet/admin/timesheet/day/:dayEntryId
-            // Purpose: Refresh the latest backend state after Approve/Reject.
-            let response;
-
-            try {
-                response = await api.get(
+                await api.get(
                     `/timesheet/admin/timesheet/day/${encodeURIComponent(
                         dayEntryId
                     )}`,
@@ -1267,27 +1147,25 @@ function TimesheetDetailModal({
                         headers: { "Cache-Control": "no-cache" },
                     }
                 );
-            } catch (refreshError) {
-                throw new Error(
-                    `Unable to refresh timesheet (${refreshError?.response?.status || "unknown"})`
-                );
+            } catch (verifyError) {
+                // A verification failure must not undo the successful save.
+                if (verifyError?.response?.status === 401) {
+                    window.dispatchEvent(new Event("session-expired"));
+                }
             }
 
-            const data = response.data;
-            const freshDetails = extractDayDetails(data);
+            skipNextDetailsSyncRef.current = true;
+            setEditableDetails(updatedDetails);
 
-            if (freshDetails && typeof freshDetails === "object") {
-                return {
-                    ...(fallbackDetails || {}),
-                    ...freshDetails,
-                    day_entry_id: freshDetails?.day_entry_id || dayEntryId,
-                };
-            }
-        } catch (refreshError) {
-            console.warn("[TIMESHEET ACTION] Fresh GET failed; using action result:", refreshError);
+        } catch (err) {
+            handleApiError(
+                err,
+                "Unable to Save Timesheet",
+                "Unable to update timesheet."
+            );
+        } finally {
+            setSaveLoading(false);
         }
-
-        return fallbackDetails;
     };
 
     // Approve the selected timesheet through the API.
@@ -1303,38 +1181,16 @@ function TimesheetDetailModal({
 
         setActionLoading(true);
         setActionType("approve");
-        setActionMessage("");
         setActionError("");
 
         try {
             // API: POST /timesheet/admin/timesheet/day/:dayEntryId/approve
             // Purpose: Approve the selected timesheet day.
-            let response;
-            try {
-                response = await api.post(
-                    `/timesheet/admin/timesheet/day/${encodeURIComponent(
-                        dayEntryId
-                    )}/approve`
-                );
-            } catch (error) {
-                const data = error?.response?.data;
-                const status = error?.response?.status;
-
-                let message =
-                    `Unable to approve timesheet (${status || "unknown"})`;
-
-                if (typeof data?.detail === "string") {
-                    message = data.detail;
-                } else if (Array.isArray(data?.detail)) {
-                    message = data.detail
-                        .map((item) => item?.msg || item)
-                        .join(", ");
-                }
-
-                throw new Error(message);
-            }
-
-            const data = response.data;
+            await api.post(
+                `/timesheet/admin/timesheet/day/${encodeURIComponent(
+                    dayEntryId
+                )}/approve`
+            );
 
             const approvedDetails = {
                 ...(editableDetails || details || {}),
@@ -1346,17 +1202,12 @@ function TimesheetDetailModal({
             setEditableDetails(approvedDetails);
             skipNextDetailsSyncRef.current = true;
             onSaved?.(approvedDetails);
-            setActionMessage("");
             setSuccessPopupType("approved");
             setShowSuccessPopup(true);
         } catch (err) {
-            console.error(
-                "Timesheet Approve Error:",
-                err
-            );
-
-            setActionError(
-                err?.message ||
+            handleApiError(
+                err,
+                "Unable to Approve Timesheet",
                 "Unable to approve timesheet."
             );
         } finally {
@@ -1376,7 +1227,6 @@ function TimesheetDetailModal({
             return;
         }
 
-        setActionMessage("");
         setActionError("");
         setRejectReason("");
         setShowRejectPopup(true);
@@ -1421,42 +1271,20 @@ function TimesheetDetailModal({
 
         setActionLoading(true);
         setActionType("reject");
-        setActionMessage("");
         setActionError("");
 
         try {
             // API: POST /timesheet/admin/timesheet/day/:dayEntryId/reject
             // Purpose: Reject the selected timesheet day with the entered reason.
-            let response;
 
-            try {
-                response = await api.post(
-                    `/timesheet/admin/timesheet/day/${encodeURIComponent(
-                        rejectDayEntryId
-                    )}/reject`,
-                    {
-                        reason: trimmedReason,
-                    }
-                );
-            } catch (error) {
-                const data = error?.response?.data;
-                const status = error?.response?.status;
-
-                let message =
-                    `Unable to reject timesheet (${status || "unknown"})`;
-
-                if (typeof data?.detail === "string") {
-                    message = data.detail;
-                } else if (Array.isArray(data?.detail)) {
-                    message = data.detail
-                        .map((item) => item?.msg || item)
-                        .join(", ");
+            await api.post(
+                `/timesheet/admin/timesheet/day/${encodeURIComponent(
+                    rejectDayEntryId
+                )}/reject`,
+                {
+                    reason: trimmedReason,
                 }
-
-                throw new Error(message);
-            }
-
-            const data = response.data;
+            );
 
             const rejectedDetails = {
                 ...(pendingRejectDetails || editableDetails || details || {}),
@@ -1469,8 +1297,6 @@ function TimesheetDetailModal({
             setEditableDetails(rejectedDetails);
             skipNextDetailsSyncRef.current = true;
             onSaved?.(rejectedDetails);
-            setActionMessage("");
-
             setShowRejectPopup(false);
             setRejectReason("");
             setPendingRejectDayEntryId(null);
@@ -1479,13 +1305,9 @@ function TimesheetDetailModal({
             setSuccessPopupType("rejected");
             setShowSuccessPopup(true);
         } catch (err) {
-            console.error(
-                "Timesheet Reject Error:",
-                err
-            );
-
-            setActionError(
-                err?.message ||
+            handleApiError(
+                err,
+                "Unable to Reject Timesheet",
                 "Unable to reject timesheet."
             );
         } finally {
@@ -2287,6 +2109,14 @@ function TimesheetDetailModal({
                             </div>
                         </div>
                     </div>
+                )}
+
+                {apiError && (
+                    <ApiErrorModal
+                        title={apiError.title}
+                        message={apiError.message}
+                        onClose={() => setApiError(null)}
+                    />
                 )}
             </div>
         </div>

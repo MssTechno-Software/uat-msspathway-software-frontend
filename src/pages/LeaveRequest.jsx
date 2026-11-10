@@ -1,26 +1,41 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { FiLoader } from "react-icons/fi"
-import axios from "axios";
+import api from "../api/axios";
 import LeaveRequestStatus from "../container/LeaveRequestStatus";
+import ApiErrorModal from "../container/ApiErrorModal";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
 
-const API = axios.create({
-  baseURL: "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app",
-  headers: {
-    "Content-Type": "application/json",
-  },
-});
+const dispatchSessionExpiredIfNeeded = (error) => {
+  if (error?.response?.status !== 401) {
+    return false;
+  }
 
-API.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
+  window.dispatchEvent(new Event("session-expired"));
+  return true;
+};
+
+const getLeaveRequestErrorMessage = (error, fallbackMessage) => {
+  const detail = error?.response?.data?.detail;
+  const detailMessage = Array.isArray(detail)
+    ? detail.map((item) => item?.msg || item?.message).filter(Boolean).join(", ")
+    : typeof detail === "string"
+      ? detail
+      : "";
+
+  return (
+    detailMessage ||
+    error?.response?.data?.message ||
+    error?.response?.data?.error ||
+    getApiErrorMessage(error, fallbackMessage)
+  );
+};
 
 function LeaveRequests() {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [pageLoading, setPageLoading] = useState(false);
+  const [requestsLoadError, setRequestsLoadError] = useState("");
+  const [apiError, setApiError] = useState(null);
   const [openModal, setOpenModal] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -56,20 +71,56 @@ function LeaveRequests() {
   };
 
   // FETCH LEAVE REQUESTS
-  const fetchLeaveRequests = async () => {
+  const fetchLeaveRequests = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await API.get("/timesheet/admin/leave-requests");
-      console.log("Leave Requests:", response.data);
+      setRequestsLoadError("");
+
+      const response = await api.get("/timesheet/admin/leave-requests");
       setRequests(
         Array.isArray(response.data)
           ? response.data
           : response.data?.data || []
       );
+      return true;
     } catch (error) {
-      console.error("Error fetching leave requests:", error);
+      const message = getLeaveRequestErrorMessage(
+        error,
+        "Unable to load leave requests. Please try again."
+      );
+      setRequests([]);
+      setRequestsLoadError(message);
+      setApiError({
+        title: "Unable to Load Leave Requests",
+        message,
+        onRetry: () => fetchLeaveRequests(),
+      });
+      dispatchSessionExpiredIfNeeded(error);
+      return false;
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  // Display action errors through the shared API error modal.
+  const showApiError = (error, title, fallbackMessage, onRetry) => {
+    if (dispatchSessionExpiredIfNeeded(error)) {
+      return;
+    }
+
+    setApiError({
+      title,
+      message: getLeaveRequestErrorMessage(error, fallbackMessage),
+      onRetry,
+    });
+  };
+
+  const retryApiAction = async () => {
+    const retry = apiError?.onRetry;
+    setApiError(null);
+
+    if (retry) {
+      await retry();
     }
   };
 
@@ -77,27 +128,23 @@ function LeaveRequests() {
   const handleApprove = async (request) => {
     try {
       setLoading(true);
-      console.log("REQUEST:", request);
       const leave_id = request?.leave_id;
-      const response = await API.put(`/timesheet/leave-status/${leave_id}`,
-        {
-          status: "approved",
-        }
-      );
-      console.log("Approve Response:", response.data);
-      showPopup("Leave approved successfully", "success");
+      await api.put(`/timesheet/leave-status/${leave_id}`, {
+        status: "approved",
+      });
       setOpenModal(false);
-      fetchLeaveRequests();
+
+      const refreshed = await fetchLeaveRequests();
+      if (refreshed) {
+        showPopup("Leave approved successfully", "success");
+      }
     } catch (error) {
-      console.error(error);
-      const errorMessage =
-        error?.response?.data?.detail?.[0]?.msg ||
-        error?.response?.data?.detail ||
-        error?.response?.data?.message ||
-        error?.response?.data?.error ||
-        error?.message ||
-        "Failed to approve leave";
-      showPopup(errorMessage, "error");
+      showApiError(
+        error,
+        "Leave approval failed",
+        "Failed to approve leave. Please try again.",
+        () => handleApprove(request)
+      );
     } finally {
       setLoading(false);
     }
@@ -106,27 +153,23 @@ function LeaveRequests() {
   const handleReject = async (request) => {
     try {
       setLoading(true);
-      console.log("REQUEST:", request);
       const leave_id = request?.leave_id;
-      const response = await API.put(`/timesheet/leave-status/${leave_id}`,
-        {
-          status: "rejected",
-        }
-      );
-      console.log("Reject Response:", response.data);
-      showPopup("Leave rejected successfully", "success");
+      await api.put(`/timesheet/leave-status/${leave_id}`, {
+        status: "rejected",
+      });
       setOpenModal(false);
-      fetchLeaveRequests();
+
+      const refreshed = await fetchLeaveRequests();
+      if (refreshed) {
+        showPopup("Leave rejected successfully", "success");
+      }
     } catch (error) {
-      console.error(error);
-      const errorMessage =
-        error?.response?.data?.detail?.[0]?.msg ||
-        error?.response?.data?.detail ||
-        error?.response?.data?.message ||
-        error?.response?.data?.error ||
-        error?.message ||
-        "Failed to reject leave";
-      showPopup(errorMessage, "error");
+      showApiError(
+        error,
+        "Leave rejection failed",
+        "Failed to reject leave. Please try again.",
+        () => handleReject(request)
+      );
     } finally {
       setLoading(false);
     }
@@ -134,18 +177,21 @@ function LeaveRequests() {
 
   // DELETE LEAVE REQUEST
   const deleteLeaveRequest = async (leaveId) => {
-    console.log("Deleting Leave Request ID:", leaveId);
     try {
       setLoading(true);
-      const response = await API.delete(`/timesheet/leave/${leaveId}`);
-      console.log("Delete Response:", response.data);
+      await api.delete(`/timesheet/leave/${leaveId}`);
 
-      showPopup("Leave request deleted successfully", "success");
-
-      fetchLeaveRequests();
+      const refreshed = await fetchLeaveRequests();
+      if (refreshed) {
+        showPopup("Leave request deleted successfully", "success");
+      }
     } catch (error) {
-      console.error("Error deleting leave request:", error);
-      showPopup("Failed to delete leave request", "error");
+      showApiError(
+        error,
+        "Leave request deletion failed",
+        "Failed to delete leave request. Please try again.",
+        () => deleteLeaveRequest(leaveId)
+      );
     } finally {
       setLoading(false);
     }
@@ -156,12 +202,9 @@ function LeaveRequests() {
     const handleRefresh = () => fetchLeaveRequests();
     window.addEventListener("leaveRequestUpdated", handleRefresh);
     return () => {
-      window.removeEventListener(
-        "leaveRequestUpdated",
-        handleRefresh
-      );
+      window.removeEventListener("leaveRequestUpdated", handleRefresh);
     };
-  }, []);
+  }, [fetchLeaveRequests]);
 
   // HELPERS
   const formatDate = (date) => {
@@ -330,11 +373,10 @@ function LeaveRequests() {
     currentPage * itemsPerPage,
     filteredRequests.length
   );
-
   return (
     <>
-      {(loading || pageLoading) && (
-        <div className="fixed inset-0 bg-black/40 z-9999 flex items-center justify-center">
+         {loading && (
+          <div className="fixed inset-0 bg-black/40 z-9999 flex items-center justify-center">
 
           <div className="p-6 flex flex-col items-center gap-3">
 
@@ -401,7 +443,28 @@ function LeaveRequests() {
             </div>
           </div>
 
-          {/*Table*/}
+          {/* Table */}
+          {requestsLoadError && !loading ? (
+            <div
+              className="flex min-h-[55vh] flex-col items-center justify-center gap-3 rounded-2xl border border-red-200 bg-red-50 p-8 text-center"
+              role="alert"
+            >
+              <h2 className="text-lg font-semibold text-red-700">
+                Unable to load leave requests
+              </h2>
+              <p className="max-w-lg text-sm text-gray-600">{requestsLoadError}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setApiError(null);
+                  fetchLeaveRequests();
+                }}
+                className="mt-2 rounded-lg bg-green-800 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-700"
+              >
+                Try Again
+              </button>
+            </div>
+          ) : (
           <div className="overflow-x-auto w-full">
             <div className="min-w-275 bg-white rounded-3xl shadow-md border border-gray-100 overflow-hidden">
               {/* Header */}
@@ -601,6 +664,7 @@ function LeaveRequests() {
               )}
             </div>
           </div>
+          )}
         </div>
 
         <LeaveRequestStatus
@@ -667,6 +731,14 @@ function LeaveRequests() {
           </div>
         )}
       </div>
+      {apiError && (
+        <ApiErrorModal
+          title={apiError.title}
+          message={apiError.message}
+          onRetry={apiError.onRetry ? retryApiAction : undefined}
+          onClose={() => setApiError(null)}
+        />
+      )}
     </>
   );
 }

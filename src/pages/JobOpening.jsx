@@ -14,6 +14,22 @@ import {
     AlertCircle,
     RotateCcw,
 } from "lucide-react";
+import ApiErrorModal from "../container/ApiErrorModal";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
+
+const dispatchSessionExpiredIfNeeded = (error) => {
+    if (error?.response?.status !== 401 && error?.status !== 401) {
+        return false;
+    }
+
+    window.dispatchEvent(new Event("session-expired"));
+    return true;
+};
+
+const getJobApiErrorMessage = (error, fallbackMessage) => {
+    dispatchSessionExpiredIfNeeded(error);
+    return getApiErrorMessage(error, fallbackMessage);
+};
 
 const API_URL =
     "https://timesheet-api-790373899641.asia-south1.run.app/openings";
@@ -31,8 +47,9 @@ const JobOpening = () => {
 
     // UI STATES
     const [loading, setLoading] = useState(true);
-    const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState("");
+    const [apiError, setApiError] = useState(null);
+    const [showErrorFallback, setShowErrorFallback] = useState(false);
 
     // SEARCH / FILTERS
 
@@ -55,15 +72,12 @@ const JobOpening = () => {
 
     // FETCH JOB OPENINGS
     const fetchJobs = useCallback(
-        async (isRefresh = false) => {
+        async () => {
             try {
-                if (isRefresh) {
-                    setRefreshing(true);
-                } else {
-                    setLoading(true);
-                }
-
+                setLoading(true);
                 setError("");
+                setApiError(null);
+                setShowErrorFallback(false);
 
                 const params = new URLSearchParams({
                     page: String(currentPage),
@@ -80,9 +94,25 @@ const JobOpening = () => {
                 );
 
                 if (!response.ok) {
-                    throw new Error(
+                    let responseData = null;
+
+                    try {
+                        responseData = await response.json();
+                    } catch {
+                        // Keep the HTTP status as the fallback when the response has no JSON body.
+                    }
+
+                    const requestError = new Error(
+                        responseData?.detail ||
+                        responseData?.message ||
+                        responseData?.error ||
                         `Unable to fetch job openings. Server returned ${response.status}.`
                     );
+                    requestError.response = {
+                        status: response.status,
+                        data: responseData,
+                    };
+                    throw requestError;
                 }
 
                 const data = await response.json();
@@ -99,21 +129,29 @@ const JobOpening = () => {
                     jobPostings.length
                 );
             } catch (err) {
-                console.error("Job openings API error:", err);
-
-                setError(
-                    err?.message ||
+                const errorMessage = getJobApiErrorMessage(
+                    err,
                     "Something went wrong while loading job openings."
                 );
 
+                setError(errorMessage);
+                setApiError({
+                    title: "Unable to Load Job Openings",
+                    message: errorMessage,
+                });
                 setJobs([]);
             } finally {
                 setLoading(false);
-                setRefreshing(false);
             }
         },
         [currentPage, searchQuery]
     );
+    const retryJobFetch = async () => {
+        setApiError(null);
+        setShowErrorFallback(false);
+        await fetchJobs();
+    };
+
     // INITIAL / PAGE CHANGE FETCH
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -126,37 +164,7 @@ const JobOpening = () => {
     useEffect(() => {
         fetchJobs();
     }, [fetchJobs]);
-    // REFRESH
-    const handleRefresh = async () => {
-        try {
-            setRefreshing(true);
-            setError("");
-
-            const refreshResponse = await fetch(REFRESH_API_URL, {
-                method: "POST",
-                headers: {
-                    Accept: "application/json",
-                },
-            });
-
-            if (!refreshResponse.ok) {
-                throw new Error(
-                    `Unable to refresh job openings. Server returned ${refreshResponse.status}.`
-                );
-            }
-
-            await fetchJobs();
-        } catch (err) {
-            console.error("Job openings refresh error:", err);
-
-            setError(
-                err?.message ||
-                "Something went wrong while refreshing job openings."
-            );
-        } finally {
-            setRefreshing(false);
-        }
-    };
+ 
     // RESET FILTERS
 
     const handleResetFilters = () => {
@@ -555,7 +563,8 @@ const JobOpening = () => {
     // MAIN RETURN
 
     return (
-        <div className="min-h-screen bg-white text-slate-900">
+        <>
+            <div className="min-h-screen bg-white text-slate-900">
             <main className="min-w-0 flex-1">
                 <div className="px-5 py-6 sm:px-7 lg:px-8">
 
@@ -663,28 +672,6 @@ const JobOpening = () => {
                                     className="bg-transparent text-sm text-slate-700 outline-none"
                                 />
                             </label>
-
-                            {/* REFRESH 
-
-                            <button
-                                type="button"
-                                onClick={handleRefresh}
-                                disabled={refreshing}
-                                className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#016630] px-5 py-3 text-sm font-semibold text-white transition-all duration-200 hover:bg-[#004b25] hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                                <RefreshCw
-                                    size={17}
-                                    className={
-                                        refreshing
-                                            ? "animate-spin"
-                                            : ""
-                                    }
-                                />
-
-                                {refreshing
-                                    ? "Refreshing..."
-                                    : "Refresh"}
-                            </button>*/}
                         </div>
                         {dateError && (
                             <div className="mt-2 flex items-center gap-2 text-sm text-red-600">
@@ -724,9 +711,9 @@ const JobOpening = () => {
 
                     {/*  ERROR*/}
 
-                    {error && !loading && (
+                    {error && !loading && showErrorFallback && (
                         <div
-                            className="mb-6 flex flex-col items-center justify-center rounded-2xl border border-red-200 bg-red-50 px-6 py-12 text-center"
+                            className="flex min-h-[55vh] flex-col items-center justify-center rounded-2xl border border-red-200 bg-red-50 px-6 py-12 text-center"
                         >
                             <AlertCircle
                                 size={40}
@@ -933,7 +920,19 @@ const JobOpening = () => {
                         )}
                 </div>
             </main>
-        </div>
+            </div>
+            {apiError && (
+                <ApiErrorModal
+                    title={apiError.title}
+                    message={apiError.message}
+                    onRetry={retryJobFetch}
+                    onClose={() => {
+                        setApiError(null);
+                        setShowErrorFallback(Boolean(error));
+                    }}
+                />
+            )}
+        </>
     );
 };
 

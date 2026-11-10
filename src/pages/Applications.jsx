@@ -1,15 +1,42 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { FiEdit, FiTrash2, FiSearch, FiX, FiLoader } from "react-icons/fi";
 import axios from "axios";
 import AddApplication from "./AddApplication";
+import { API_BASE_URL } from "../api/axios";
+import ApiErrorModal from "../container/ApiErrorModal";
+import { getApiErrorMessage } from "../utils/apiErrorHandler";
+import { getAccessToken } from "../services/authSession";
 
 const API = axios.create({
-    baseURL: "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app",
+    baseURL: API_BASE_URL,
 });
 
+// Keep backend messages when available and use the shared handler as fallback.
+const getApplicationErrorMessage = (error, fallback) => {
+    const data = error?.response?.data;
+    const detail = data?.detail;
+    const backendMessage =
+        data?.message ||
+        data?.error ||
+        (typeof detail === "string"
+            ? detail
+            : Array.isArray(detail)
+                ? detail.map((item) => item?.msg || item).join(", ")
+                : "");
+
+    return backendMessage || getApiErrorMessage(error, fallback);
+};
+
+// Let the shared session handler respond to unauthorized API requests.
+const handleUnauthorized = (error) => {
+    if (error?.response?.status === 401) {
+        window.dispatchEvent(new Event("session-expired"));
+    }
+};
+
 API.interceptors.request.use((config) => {
-    const token = localStorage.getItem("token");
+    const token = getAccessToken();
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
@@ -27,8 +54,6 @@ function Applications() {
     const [toDate, setToDate] = useState("");
     const [appliedFromDate, setAppliedFromDate] = useState("");
     const [appliedToDate, setAppliedToDate] = useState("");
-    const [clientName, setClientName] = useState("");
-    const [previousCounts, setPreviousCounts] = useState({});
     const [pageMap, setPageMap] = useState({});
     const ITEMS_PER_PAGE = 5;
     const [loading, setLoading] = useState(false);
@@ -40,6 +65,8 @@ function Applications() {
             type: ""
         }
     );
+    const [apiError, setApiError] = useState(null);
+    const [applicationsLoadFailed, setApplicationsLoadFailed] = useState(false);
 
     const platforms = [
         "All",
@@ -50,69 +77,67 @@ function Applications() {
         "Other",
     ];
 
-    // FETCH
-    useEffect(() => {
-        const fetchApplications = async () => {
-            try {
-                setLoading(true);
-                const res = await API.get(`/applications/applications/${client_id}`);
-                console.log("Fetched applications:", res.data);
+    // FETCH APPLICATIONS
+    const fetchApplications = useCallback(async () => {
+        try {
+            setLoading(true);
+            setApiError(null);
+            setApplicationsLoadFailed(false);
 
-                const appsObject = res.data?.applications || {};
+            const res = await API.get(`/applications/applications/${client_id}`);
+            const appsObject = res.data?.applications || {};
 
-                // convert object → array + add platform
-                const allApplications = Object.entries(appsObject).flatMap(([platform, apps]) =>
-                    apps.map(app => ({ ...app, platform }))
-                );
+            // Convert the platform object into a list for the table and cards.
+            const allApplications = Object.entries(appsObject).flatMap(([platform, apps]) =>
+                apps.map((app) => ({ ...app, platform }))
+            );
 
-                const formatted = allApplications
-                    .map((app) => ({
-                        id: app.id,
-                        platform: app.platform,
-                        company: app.company_name,
-                        role: app.role,
-                        date: app.date,
-                        link: app.application_link,
-                        notes: app.notes,
-                        created_at: app.created_at,
-                        updated_at: app.updated_at
-                    }))
-                    .sort((a, b) => {
-
-                        // latest updated first
-                        const dateA = new Date(
-                            a.updated_at || a.created_at
-                        );
-
-                        const dateB = new Date(
-                            b.updated_at || b.created_at
-                        );
-
-                        return dateB - dateA;
-                    });
-
-                setApplications(formatted);
-            } catch (err) {
-                console.error("ERROR:", err.response?.data || err.message);
-                setPopup({
-                    show: true,
-                    message: err.response?.data?.message || "Failed to fetch applications",
-                    type: "error"
+            const formatted = allApplications
+                .map((app) => ({
+                    id: app.id,
+                    platform: app.platform,
+                    company: app.company_name,
+                    role: app.role,
+                    date: app.date,
+                    link: app.application_link,
+                    notes: app.notes,
+                    created_at: app.created_at,
+                    updated_at: app.updated_at
+                }))
+                .sort((a, b) => {
+                    // Show the most recently updated applications first.
+                    const dateA = new Date(a.updated_at || a.created_at);
+                    const dateB = new Date(b.updated_at || b.created_at);
+                    return dateB - dateA;
                 });
-            } finally {
-                setLoading(false);
-            }
-        };
 
-        fetchApplications();
+            setApplications(formatted);
+        } catch (error) {
+            handleUnauthorized(error);
+            setApplicationsLoadFailed(true);
+            setApiError({
+                title: "Unable to Load Applications",
+                message: getApplicationErrorMessage(error, "Failed to fetch applications."),
+                retryAction: "applications"
+            });
+        } finally {
+            setLoading(false);
+        }
     }, [client_id]);
 
-    //add and update applications
+    useEffect(() => {
+        if (client_id) {
+            fetchApplications();
+        }
+    }, [client_id, fetchApplications]);
+
+    // Add a new application or update the selected application.
     const addApplication = async (app) => {
         try {
             setLoading(true);
             const isEdit = !!editingApp;
-            // Required only while adding
+
+            // Required only while adding.
             if (
                 !isEdit &&
                 (!app.platform || !app.company || !app.role || !app.date || !app.link)
@@ -122,10 +147,10 @@ function Applications() {
                     message: "Please fill in all required fields",
                     type: "error"
                 });
-
                 setLoading(false);
                 return;
             }
+
             const payload = {
                 platform: app.platform,
                 company_name: app.company,
@@ -135,27 +160,18 @@ function Applications() {
                 notes: app.notes || ""
             };
 
-            console.log("Application with payload:", payload);
-            console.log("Client ID:", client_id);
-
             if (editingApp) {
                 // UPDATE
                 const application_id = editingApp.id;
-                const response = await API.put(`/applications/update/${application_id}`, payload);
-
-                console.log("updated applications:", response.data);
-                setLoading(false);
+                await API.put(`/applications/update/${application_id}`, payload);
                 setPopup({
                     show: true,
                     message: "Application updated successfully",
                     type: "success"
                 });
-
             } else {
                 // CREATE
-                const response = await API.post(`/applications/create_application/${client_id}`, payload);
-                console.log("Added Apllication:", response.data);
-                setLoading(false);
+                await API.post(`/applications/create_application/${client_id}`, payload);
                 setPopup({
                     show: true,
                     message: "Application added successfully",
@@ -163,36 +179,35 @@ function Applications() {
                 });
             }
 
-            //refresh
+            // Refresh the list after saving.
             const res = await API.get(`/applications/applications/${client_id}`);
-            console.log("Feached applications after save:", res.data)
             const appsObject = res.data?.applications || {};
-
             const allApplications = Object.entries(appsObject).flatMap(([platform, apps]) =>
-                apps.map(app => ({ ...app, platform }))
+                apps.map((item) => ({ ...item, platform }))
             );
-
-            const formatted = allApplications.map((app) => ({
-                id: app.id,
-                platform: app.platform,
-                company: app.company_name,
-                role: app.role,
-                date: app.date,
-                link: app.application_link,
-                notes: app.notes
+            const formatted = allApplications.map((item) => ({
+                id: item.id,
+                platform: item.platform,
+                company: item.company_name,
+                role: item.role,
+                date: item.date,
+                link: item.application_link,
+                notes: item.notes
             }));
 
             setApplications(formatted);
+            setApplicationsLoadFailed(false);
             setShowModal(false);
             setEditingApp(null);
-        } catch (err) {
-            console.error(err.response?.data || err.message);
-            setLoading(false);
+        } catch (error) {
+            handleUnauthorized(error);
             setPopup({
                 show: true,
-                message: "Failed to save application",
+                message: getApplicationErrorMessage(error, "Failed to save application."),
                 type: "error"
             });
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -214,9 +229,6 @@ function Applications() {
             const formData = new FormData();
             formData.append("file", file);
 
-            console.log("Bulk upload file:", file.name);
-            console.log("Client ID:", client_id);
-
             const response = await API.post(
                 `/applications/create_bulk/${client_id}`,
                 formData,
@@ -227,18 +239,11 @@ function Applications() {
                 }
             );
 
-            console.log("Bulk upload response:", response.data);
-
-            // Refresh applications after successful bulk upload
-            const res = await API.get(
-                `/applications/applications/${client_id}`
-            );
-
+            // Refresh applications after a successful bulk upload.
+            const res = await API.get(`/applications/applications/${client_id}`);
             const appsObject = res.data?.applications || {};
-
             const allApplications = Object.entries(appsObject).flatMap(
-                ([platform, apps]) =>
-                    apps.map((app) => ({ ...app, platform }))
+                ([platform, apps]) => apps.map((app) => ({ ...app, platform }))
             );
 
             const formatted = allApplications
@@ -254,37 +259,25 @@ function Applications() {
                     updated_at: app.updated_at
                 }))
                 .sort((a, b) => {
-                    const dateA = new Date(
-                        a.updated_at || a.created_at
-                    );
-                    const dateB = new Date(
-                        b.updated_at || b.created_at
-                    );
+                    const dateA = new Date(a.updated_at || a.created_at);
+                    const dateB = new Date(b.updated_at || b.created_at);
                     return dateB - dateA;
                 });
 
             setApplications(formatted);
+            setApplicationsLoadFailed(false);
             setShowModal(false);
             setEditingApp(null);
-
             setPopup({
                 show: true,
-                message:
-                    response.data?.message ||
-                    "Applications uploaded successfully",
+                message: response.data?.message || "Applications uploaded successfully",
                 type: "success"
             });
-        } catch (err) {
-            console.error(
-                "Bulk upload error:",
-                err.response?.data || err.message
-            );
-
+        } catch (error) {
+            handleUnauthorized(error);
             setPopup({
                 show: true,
-                message:
-                    err.response?.data?.message ||
-                    "Failed to upload applications",
+                message: getApplicationErrorMessage(error, "Failed to upload applications."),
                 type: "error"
             });
         } finally {
@@ -292,7 +285,7 @@ function Applications() {
         }
     };
 
-    //Delete Client
+    // DELETE APPLICATION
     const handleDelete = (application_id) => {
         setPopup({
             show: true,
@@ -301,19 +294,14 @@ function Applications() {
             onConfirm: async () => {
                 try {
                     setLoading(true);
-                    const response = await API.delete(`/applications/delete/${application_id}`);
-                    console.log("Deleted application:", response.data);
+                    await API.delete(`/applications/delete/${application_id}`);
 
-                    // refresh applications
+                    // Refresh the applications list after deletion.
                     const res = await API.get(`/applications/applications/${client_id}`);
-                    console.log("Fetched applications after deletion:", res.data);
-
                     const appsObject = res.data?.applications || {};
-
-                    const allApplications = Object.entries(appsObject).flatMap(([platform, apps]) =>
-                        apps.map(app => ({ ...app, platform }))
+                    const allApplications = Object.entries(appsObject).flatMap(
+                        ([platform, apps]) => apps.map((app) => ({ ...app, platform }))
                     );
-
                     const formatted = allApplications.map((app) => ({
                         id: app.id,
                         platform: app.platform,
@@ -325,18 +313,17 @@ function Applications() {
                     }));
 
                     setApplications(formatted);
+                    setApplicationsLoadFailed(false);
                     setPopup({
                         show: true,
                         message: "Application deleted successfully",
                         type: "success"
                     });
-
-                } catch (err) {
-                    console.error(err.response?.data || err.message);
-
+                } catch (error) {
+                    handleUnauthorized(error);
                     setPopup({
                         show: true,
-                        message: "Failed to delete application",
+                        message: getApplicationErrorMessage(error, "Failed to delete application."),
                         type: "error"
                     });
                 } finally {
@@ -348,12 +335,11 @@ function Applications() {
 
     const handleEdit = async (application_id) => {
         try {
-            console.log("Editing application id:", application_id);
             const res = await API.get(`/applications/applcations/application_id`, {
                 params: { application_id: application_id }
             });
-            console.log("Edit API response:", res.data);
             const data = res.data;
+
             setEditingApp({
                 id: data.id,
                 platform: data.platform,
@@ -363,17 +349,18 @@ function Applications() {
                 link: data.application_link,
                 notes: data.notes || ""
             });
-
             setShowModal(true);
-
-        } catch (err) {
-            console.error("Edit API error:", err.response?.data || err.message);
+        } catch (error) {
+            handleUnauthorized(error);
+            // Keep the applications page open if the edit request fails.
+            setPopup({
+                show: true,
+                message: getApplicationErrorMessage(error, "Unable to load application details."),
+                type: "error"
+            });
         }
     };
-    useEffect(() => {
-        const prev = JSON.parse(localStorage.getItem(`prev_counts_${client_id}`)) || {};
-        setPreviousCounts(prev);
-    }, [client_id]);
+
     //get the percentage
     const getPercentage = (count, total) => {
         if (total === 0) return 0;
@@ -704,9 +691,22 @@ function Applications() {
                             </thead>
 
                             <tbody>
-                                {filteredApps.length === 0 ? (
+                                {applicationsLoadFailed ? (
                                     <tr>
-                                        <td colSpan="5" className="text-center py-10 text-gray-400">
+                                        <td colSpan="6" className="text-center py-10 text-gray-500">
+                                            <p>Unable to load applications.</p>
+                                            <button
+                                                type="button"
+                                                onClick={fetchApplications}
+                                                className="mt-3 px-4 py-2 rounded-lg bg-green-800 text-white hover:bg-green-700 cursor-pointer"
+                                            >
+                                                Try Again
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ) : filteredApps.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="6" className="text-center py-10 text-gray-400">
                                             No applications found
                                         </td>
                                     </tr>
@@ -862,6 +862,22 @@ function Applications() {
                         onBulkUpload={handleBulkUpload}
                         editingApp={editingApp}
                         setPopup={setPopup}
+                    />
+                )}
+
+                {apiError && (
+                    <ApiErrorModal
+                        title={apiError.title}
+                        message={apiError.message}
+                        onRetry={
+                            apiError.retryAction === "applications"
+                                ? () => {
+                                    setApiError(null);
+                                    fetchApplications();
+                                }
+                                : undefined
+                        }
+                        onClose={() => setApiError(null)}
                     />
                 )}
 

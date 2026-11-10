@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 export default function WeeklyOverview({
   calendarDays,
@@ -12,7 +12,22 @@ export default function WeeklyOverview({
   resetKey,
 }) {
   const [selectedWeek, setSelectedWeek] = useState(null);
+  const [previousResetKey, setPreviousResetKey] = useState(resetKey);
+  const [previousIsFinalized, setPreviousIsFinalized] = useState(isFinalized);
   const weekDetailRefs = useRef({});
+
+  // Reset selection when the parent resets the view or finalizes the month.
+  if (resetKey !== previousResetKey || isFinalized !== previousIsFinalized) {
+    const shouldResetSelectedWeek =
+      resetKey !== previousResetKey || (isFinalized && !previousIsFinalized);
+
+    setPreviousResetKey(resetKey);
+    setPreviousIsFinalized(isFinalized);
+
+    if (shouldResetSelectedWeek) {
+      setSelectedWeek(null);
+    }
+  }
 
   // Build weekly overview data.
   const weeklyData = useMemo(() => {
@@ -28,14 +43,6 @@ export default function WeeklyOverview({
         data: timesheet[day],
       }));
 
-      const workingItems = items.filter(
-        ({ data }) =>
-          data &&
-          data.status !== "weekend" &&
-          data.status !== "holiday" &&
-          data.status !== "leave"
-      );
-
       const totalHours = Math.round(
         (items.reduce(
           (sum, { data }) => sum + Number(data?.hours || 0),
@@ -48,44 +55,11 @@ export default function WeeklyOverview({
         ({ data }) => data?.status === "unlogged"
       );
 
-      const rejectedDays = items.filter(
-        ({ data }) => data?.status === "rejected"
-      );
-
-      const pendingDays = items.filter(
-        ({ data }) => data?.status === "pending"
-      );
-
-      let status = "Approved";
-      let statusClass =
-        "border-emerald-200 bg-emerald-50 text-emerald-700";
-
-      if (rejectedDays.length > 0) {
-        status = "Rejected";
-        statusClass = "border-red-200 bg-red-50 text-red-700";
-      } else if (unloggedDays.length > 0) {
-        status = "Missing";
-        statusClass = "border-slate-200 bg-slate-50 text-slate-600";
-      } else if (
-        pendingDays.length > 0
-      ) {
-        status = "Pending";
-        statusClass = "border-amber-200 bg-amber-50 text-amber-700";
-      } else if (
-        workingItems.length === 0 &&
-        items.some(({ data }) => data?.status === "leave")
-      ) {
-        status = "Leave";
-        statusClass = "border-sky-200 bg-sky-50 text-sky-700";
-      }
-
       weeks.push({
         week: weekIndex + 1,
         items,
         totalHours,
         unloggedDays,
-        status,
-        statusClass,
       });
     }
 
@@ -96,25 +70,11 @@ export default function WeeklyOverview({
     () =>
       Array.isArray(weeklyData)
         ? weeklyData.flatMap((week) =>
-            week.unloggedDays.map(({ day, data }) => ({
-              week: week.week,
-              day,
-              data,
-            }))
+            week.unloggedDays.map(({ day }) => ({ week: week.week, day }))
           )
         : [],
     [weeklyData]
   );
-
-  useEffect(() => {
-    setSelectedWeek(null);
-  }, [resetKey]);
-
-  useEffect(() => {
-    if (isFinalized) {
-      setSelectedWeek(null);
-    }
-  }, [isFinalized]);
 
   const handleWeekClick = (weekNumber) => {
     if (isFinalized) return;

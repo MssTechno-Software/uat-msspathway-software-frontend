@@ -2,71 +2,52 @@ import { NavLink, useNavigate } from "react-router-dom";
 
 import {
     FiUsers,
+    FiGrid,
     FiClock,
-    FiArrowLeft,
     FiUser,
     FiChevronLeft,
     FiChevronRight,
     FiLogOut,
     FiBriefcase,
-    FiCheckSquare
+    FiCheckSquare,
+    FiCalendar,
+    FiDollarSign,
+    FiBarChart2
 } from "react-icons/fi";
 
-import { FaUserTie } from "react-icons/fa";
+import {
+    FaUserTie,
+    FaRupeeSign
+} from "react-icons/fa";
 
 import { useState } from "react";
-import axios from "axios";
+import api from "../api/axios";
+import { clearAuthSession, getAccessToken, getEmployeeId, getUserRole } from "../services/authSession";
 
 function Sidebar({ children }) {
     const navigate = useNavigate();
-    const role = localStorage
-        .getItem("role")
-        ?.toLowerCase()
-        ?.trim();
-    console.log("ROLE:", role);
-    const employee_id = localStorage.getItem("employee_id");
+
+    const role = getUserRole();
+    const employee_id = getEmployeeId();
+
     const [openSidebar, setOpenSidebar] = useState(false);
 
     const handleLogout = async () => {
+        const token = getAccessToken();
         try {
-            const token = localStorage.getItem("token");
-
-            console.log("Logout Token:", token);
-
-            const response = await axios.post(
-                "https://uat-msspathway-software-backend-81057313575.asia-south1.run.app/auth/logout",
-                null,
-                {
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                        "Content-Type": "application/json",
-                    },
-                }
-            );
-
-            console.log("Logout Response:", response.data);
-
-        } catch (error) {
-
-            console.error(
-                "Logout Error:",
-                error.response?.data || error.message
-            );
-
+            await api.post("/auth/logout", null, {
+                headers: {
+                    Authorization: token ? `Bearer ${token}` : "",
+                    "Content-Type": "application/json",
+                },
+            });
+        } catch {
+            // Complete local logout even if the API request fails.
         } finally {
-
-            localStorage.removeItem("token");
-            localStorage.removeItem("user_id");
-            localStorage.removeItem("employee_id");
-            localStorage.removeItem("role");
-
+            clearAuthSession();
             navigate("/login");
         }
     };
-    const handleBack = () => {
-        navigate(-1);
-    };
-
     return (
         <div className="flex min-h-screen">
 
@@ -108,6 +89,7 @@ function Sidebar({ children }) {
 
                     {/* HEADER */}
                     {/* <div className="flex items-center gap-3 mb-10 border-b border-white/10 pb-6"> */}
+
                     {/* BACK BUTTON */}
                     {/* <button
                             onClick={handleBack}
@@ -120,8 +102,10 @@ function Sidebar({ children }) {
                         >
                             <FiArrowLeft size={20} />
                         </button> */}
+
                     <div
-                        className={`flex items-center ${openSidebar ? "gap-3" : "justify-center"} mb-10 border-b border-white/10 pb-6`}
+                        className={`flex items-center ${openSidebar ? "gap-3" : "justify-center"
+                            } mb-10 border-b border-white/10 pb-6`}
                     >
                         <img
                             src="/title_mss_logo.png"
@@ -142,7 +126,9 @@ function Sidebar({ children }) {
                                             ? "Admin Dashboard"
                                             : role === "super admin"
                                                 ? "Super Admin Dashboard"
-                                                : "Dashboard"}
+                                                : role === "hr"
+                                                    ? "HR Dashboard"
+                                                    : "Dashboard"}
                                 </p>
                             </div>
                         )}
@@ -161,14 +147,14 @@ function Sidebar({ children }) {
                                 }
                                 className={({ isActive }) =>
                                     `
-                                flex items-center gap-3
-                                px-4 py-3 rounded-xl
-                                transition-all duration-200
-                                ${isActive
+                                    flex items-center gap-3
+                                    px-4 py-3 rounded-xl
+                                    transition-all duration-200
+                                    ${isActive
                                         ? "bg-green-800"
                                         : "hover:bg-green-700"
                                     }
-                                `
+                                    `
                                 }
                             >
                                 <FiUser size={20} />
@@ -180,84 +166,88 @@ function Sidebar({ children }) {
                         )}
 
                         {/* CLIENTS */}
-                        <NavLink
-                            to={
-                                role === "employee"
-                                    ? "/employee-dashboard/clients"
-                                    : "/dashboard/clients"
-                            }
-                            className={({ isActive }) =>
-                                `
-                                flex items-center gap-3
-                                px-4 py-3 rounded-xl
-                                transition-all duration-200
-                                ${isActive
-                                    ? "bg-green-800"
-                                    : "hover:bg-green-700"
+                        {role !== "hr" && (
+                            <NavLink
+                                to={
+                                    role === "employee"
+                                        ? "/employee-dashboard/clients"
+                                        : "/dashboard/clients"
                                 }
-                                `
-                            }
-                        >
-                            <FiUsers size={20} />
-
-                            {openSidebar && (
-                                <span>Clients</span>
-                            )}
-                        </NavLink>
-                        {/* JOB OPENINGS */}
-                        <NavLink
-                            to={
-                                role === "employee"
-                                    ? "/employee-dashboard/jobopenings"
-                                    : "/dashboard/jobopenings"
-                            }
-                            className={({ isActive }) =>
-                                        `
-                                      flex items-center gap-3
-                                      px-4 py-3 rounded-xl
-                                     transition-all duration-200
-                                     ${isActive
-                                    ? "bg-green-800"
-                                    : "hover:bg-green-700"
+                                className={({ isActive }) =>
+                                    `
+                                    flex items-center gap-3
+                                    px-4 py-3 rounded-xl
+                                    transition-all duration-200
+                                    ${isActive
+                                        ? "bg-green-800"
+                                        : "hover:bg-green-700"
                                     }
-                                   `
-                            }
-                        >
-                            <FiBriefcase size={20} />
+                                    `
+                                }
+                            >
+                                <FiUsers size={20} />
 
-                            {openSidebar && (
-                                <span>Job Openings</span>
-                            )}
-                        </NavLink>
+                                {openSidebar && (
+                                    <span>Clients</span>
+                                )}
+                            </NavLink>
+                        )}
+
+                        {/* JOB OPENINGS */}
+                        {role !== "hr" && (
+                            <NavLink
+                                to={
+                                    role === "employee"
+                                        ? "/employee-dashboard/jobopenings"
+                                        : "/dashboard/jobopenings"
+                                }
+                                className={({ isActive }) =>
+                                    `
+                                    flex items-center gap-3
+                                    px-4 py-3 rounded-xl
+                                    transition-all duration-200
+                                    ${isActive
+                                        ? "bg-green-800"
+                                        : "hover:bg-green-700"
+                                    }
+                                    `
+                                }
+                            >
+                                <FiBriefcase size={20} />
+
+                                {openSidebar && (
+                                    <span>Job Openings</span>
+                                )}
+                            </NavLink>
+                        )}
+
                         {/* WORK APPROVAL */}
-{(role === "admin" || role === "super admin") && (
-    <NavLink
-        to={
-            role === "super admin"
-                ? "/super-admin-dashboard/work-approval"
-                : "/dashboard/work-approval"
-        }
-        className={({ isActive }) =>
-            `
-            flex items-center gap-3
-            px-4 py-3 rounded-xl
-            transition-all duration-200
-            ${
-                isActive
-                    ? "bg-green-800"
-                    : "hover:bg-green-700"
-            }
-            `
-        }
-    >
-        <FiCheckSquare size={20} />
+                        {(role === "admin" || role === "super admin") && (
+                            <NavLink
+                                to={
+                                    role === "super admin"
+                                        ? "/super-admin-dashboard/work-approval"
+                                        : "/dashboard/work-approval"
+                                }
+                                className={({ isActive }) =>
+                                    `
+                                    flex items-center gap-3
+                                    px-4 py-3 rounded-xl
+                                    transition-all duration-200
+                                    ${isActive
+                                        ? "bg-green-800"
+                                        : "hover:bg-green-700"
+                                    }
+                                    `
+                                }
+                            >
+                                <FiCheckSquare size={20} />
 
-        {openSidebar && (
-            <span>Work Approval</span>
-        )}
-    </NavLink>
-)}
-
+                                {openSidebar && (
+                                    <span>Work Approval</span>
+                                )}
+                            </NavLink>
+                        )}
                         {/* TIMESHEET */}
                         <NavLink
                             to={
@@ -284,6 +274,30 @@ function Sidebar({ children }) {
                             )}
                         </NavLink>
 
+                        {/* MY PAYSLIPS */}
+                        {role === "employee" && (
+                            <NavLink
+                                to="/employee-dashboard/payslips"
+                                className={({ isActive }) =>
+                                    `
+                                  flex items-center gap-3
+                                   px-4 py-3 rounded-xl
+                                   transition-all duration-200
+                                   ${isActive
+                                        ? "bg-green-800"
+                                        : "hover:bg-green-700"
+                                    }
+            `
+                                }
+                            >
+                                < FaRupeeSign size={20} />
+
+                                {openSidebar && (
+                                    <span>My Payslips</span>
+                                )}
+                            </NavLink>
+                        )}
+
                         {/* EMPLOYEE */}
                         {role !== "employee" && (
                             <NavLink
@@ -307,7 +321,112 @@ function Sidebar({ children }) {
                                 )}
                             </NavLink>
                         )}
+
+                        {/* HR DASHBOARD */}
+                        {(role === "hr" || role === "super admin") && (
+                            <NavLink
+                                to={
+                                    role === "super admin"
+                                        ? "/super-admin-dashboard/hr-dashboard/dashboard"
+                                        : "/hr-dashboard/dashboard"
+                                }
+                                className={({ isActive }) => `
+                                    flex items-center gap-3
+                                    px-4 py-3 rounded-xl
+                                    transition-all duration-200
+                                    ${isActive
+                                        ? "bg-green-800"
+                                        : "hover:bg-green-700"
+                                    }
+                                `}
+                            >
+                                <FiGrid size={20} />
+
+                                {openSidebar && (
+                                    <span>HR Dashboard</span>
+                                )}
+                            </NavLink>
+                        )}
+
+                        {/* HR LEAVE MANAGEMENT */}
+                        {(role === "hr" || role === "super admin") && (
+                            <NavLink
+                                to={
+                                    role === "super admin"
+                                        ? "/super-admin-dashboard/hr-dashboard/leave-management"
+                                        : "/hr-dashboard/leave-management"
+                                }
+                                className={({ isActive }) => `
+                                    flex items-center gap-3
+                                    px-4 py-3 rounded-xl
+                                    transition-all duration-200
+                                    ${isActive
+                                        ? "bg-green-800"
+                                        : "hover:bg-green-700"
+                                    }
+                                `}
+                            >
+                                <FiCalendar size={20} />
+
+                                {openSidebar && (
+                                    <span>Leave Management</span>
+                                )}
+                            </NavLink>
+                        )}
+
+                        {/* HR PAYROLL */}
+                        {(role === "hr" || role === "super admin") && (
+                            <NavLink
+                                to={
+                                    role === "super admin"
+                                        ? "/super-admin-dashboard/hr-dashboard/payroll"
+                                        : "/hr-dashboard/payroll"
+                                }
+                                className={({ isActive }) => `
+                                    flex items-center gap-3
+                                    px-4 py-3 rounded-xl
+                                    transition-all duration-200
+                                    ${isActive
+                                        ? "bg-green-800"
+                                        : "hover:bg-green-700"
+                                    }
+                                `}
+                            >
+                                <FiDollarSign size={20} />
+
+                                {openSidebar && (
+                                    <span>Payroll</span>
+                                )}
+                            </NavLink>
+                        )}
+
+                        {/* HR REPORTS */}
+                        {(role === "hr" || role === "super admin") && (
+                            <NavLink
+                                to={
+                                    role === "super admin"
+                                        ? "/super-admin-dashboard/hr-dashboard/reports"
+                                        : "/hr-dashboard/reports"
+                                }
+                                className={({ isActive }) => `
+                                    flex items-center gap-3
+                                    px-4 py-3 rounded-xl
+                                    transition-all duration-200
+                                    ${isActive
+                                        ? "bg-green-800"
+                                        : "hover:bg-green-700"
+                                    }
+                                `}
+                            >
+                                <FiBarChart2 size={20} />
+
+                                {openSidebar && (
+                                    <span>Reports</span>
+                                )}
+                            </NavLink>
+                        )}
                     </nav>
+
                     {/* LOGOUT BUTTON */}
                     <button
                         onClick={handleLogout}
@@ -327,9 +446,11 @@ function Sidebar({ children }) {
                             <span>Logout</span>
                         )}
                     </button>
+
                     <p className="text-center text-sm text-gray-300 mt-4 mb-4">
                         &copy; {new Date().getFullYear()} version 1.0.1
                     </p>
+
                 </div>
             </div>
 
@@ -343,6 +464,7 @@ function Sidebar({ children }) {
             >
                 {children}
             </div>
+
         </div>
     );
 }
